@@ -6,6 +6,8 @@ with open("pokemon-showdown-ai/config.json", "r") as f:
     config = json.load(f)
 
 password = config["password"]
+
+# node pokemon-showdown start --no-security
 LOCAL_SERVER = ServerConfiguration(
     "ws://localhost:8000/showdown/websocket",
     "http://localhost:8000/action.php?",
@@ -42,9 +44,14 @@ class _MaxDamageBot(Player):
 
 def get_server_configuration(play_format: int):
     if play_format == 1:
+        print("MaxDamage Bot / Using local server configuration")
         return LOCAL_SERVER
     if play_format == 2:
-        return ShowdownServerConfiguration()
+        config = ShowdownServerConfiguration
+        print(
+            f"MaxDamage Bot / Using ladder server configuration: {config.websocket_url}"
+        )
+        return config
     raise ValueError("Choose a correct answer (1 local / 2 ladder).")
 
 

@@ -16,7 +16,6 @@ LOCAL_SERVER = ServerConfiguration(
 class _RandomBot(RandomPlayer):
     battle_format = "gen9randombattle"
     server_configuration = LOCAL_SERVER
-    avatar = "gambler"
     account_configuration = AccountConfiguration(
         username="RandomBot", password=password
     )
@@ -24,9 +23,12 @@ class _RandomBot(RandomPlayer):
 
 def get_server_configuration(play_format: int):
     if play_format == 1:
+        print("Random Bot / Using local server configuration")
         return LOCAL_SERVER
     if play_format == 2:
-        return ShowdownServerConfiguration()
+        config = ShowdownServerConfiguration
+        print(f"Random Bot / Using ladder server configuration: {config.websocket_url}")
+        return config
     raise ValueError("Choose a correct answer (1 local / 2 ladder).")
 
 

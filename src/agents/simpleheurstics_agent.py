@@ -1,4 +1,4 @@
-from poke_env import RandomPlayer
+from poke_env.player.baselines import SimpleHeuristicsPlayer
 from poke_env.ps_client import ServerConfiguration, ShowdownServerConfiguration
 from config.accounts import get_account_configuration
 
@@ -8,7 +8,7 @@ LOCAL_SERVER = ServerConfiguration(
 )
 
 
-class RandomBot(RandomPlayer):
+class SHeuristicsBot(SimpleHeuristicsPlayer):
     battle_format = "gen9randombattle"
     server_configuration = LOCAL_SERVER
 
@@ -29,20 +29,22 @@ class RandomBot(RandomPlayer):
 # Choose between the local Showdown server and the public ladder server.
 def get_server_configuration(play_format: int):
     if play_format == 1:
-        print("Random Bot / Using local server configuration")
+        print("Simple Heuristics Bot / Using local server configuration")
         return LOCAL_SERVER
     if play_format == 2:
         config = ShowdownServerConfiguration
-        print(f"Random Bot / Using ladder server configuration: {config.websocket_url}")
+        print(
+            f"Simple Heuristics Bot / Using ladder server configuration: {config.websocket_url}"
+        )
         return config
     raise ValueError("Choose a correct answer (1 local / 2 ladder).")
 
 
-# Create a ready-to-use random bot with the correct server and account settings.
-def create_random_bot(play_format: int) -> "RandomBot":
+# Create a ready-to-use simple heuristics bot with the correct server and account settings.
+def create_simple_heuristics_bot(play_format: int) -> "SHeuristicsBot":
     chosen_server_configuration = get_server_configuration(play_format)
-    account_configuration = get_account_configuration(play_format, "RandomBot")
-    return RandomBot(
+    account_configuration = get_account_configuration(play_format, "SHeuristicsBot")
+    return SHeuristicsBot(
         account_configuration=account_configuration,
         server_configuration=chosen_server_configuration,
     )

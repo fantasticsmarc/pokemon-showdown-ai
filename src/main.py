@@ -27,7 +27,7 @@ def prompt_int(message: str) -> int:
     return int(input(message))
 
 
-# Build the three local players for simulations on the local server.
+# Build the local players for simulations on the local server.
 def create_all_players(play_format: int) -> list:
     return [factory(play_format) for _, factory in PLAYER_FACTORIES.values()]
 

@@ -12,7 +12,7 @@ class SHeuristicsBot(SimpleHeuristicsPlayer):
     battle_format = "gen9randombattle"
     server_configuration = LOCAL_SERVER
 
-    # Build the random bot with the selected account and server configuration.
+    # Build the simple heuristics bot with the selected account and server configuration.
     def __init__(
         self,
         *,

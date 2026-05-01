@@ -1,12 +1,4 @@
 # SmartBot combines move value, matchup danger, setup safety and special mechanics to choose between attacking, switching and spending battle resources.
-"""
-Current position: active=chienpao (pokemon object) [Active: True, Status: PSN] | opponent=lugia (pokemon object) [Active: True, Status: None] | matchup=25.57 | best_move=sacredsword (Move object) | best_move_value=-44.75 | immediate_threat=False | likely_ko_now=False | bot_moves_first=True | expected_damage=11.25 | damage_percent=11.25 | remaining_hp=96.00 | effectiveness=0.25
-Switch candidate: toucannon (pokemon object) [Active: False, Status: None] | matchup=84.65 | hazards=0.00 | final=84.65
-Switch candidate: braviaryhisui (pokemon object) [Active: False, Status: None] | matchup=104.27 | hazards=0.00 | final=104.27
-Switch candidate: golurk (pokemon object) [Active: False, Status: PSN] | matchup=29.40 | hazards=12.50 | final=41.90
-Switch decision summary: current=25.57 | best_switch=golurk (pokemon object) [Active: False, Status: PSN] | switch_score=41.90 | adjusted_switch=53.90 | best_move=-44.75 | immediate_threat=False | choose_switch=False
-Best move: sacredsword (Move object), move value: -44.75, matchup score: 25.57, immediate threat: False
-"""
 
 import battle.utilities as utilities
 from poke_env import Player
@@ -34,7 +26,6 @@ class SmartBot(Player):
         *,
         account_configuration,
         server_configuration: ServerConfiguration,
-        start_timer_on_battle_start=True,
     ):
         super().__init__(
             account_configuration=account_configuration,
@@ -194,16 +185,14 @@ class SmartBot(Player):
             current_best_move,
             battle,
         )
-        bot_moves_first = (
-            current_best_move.priority > 0
-            or utilities.get_effective_speed(
-                battle.active_pokemon,
-                battle,
-            )
-            >= utilities.get_effective_speed(
-                battle.opponent_active_pokemon,
-                battle,
-            )
+        bot_moves_first = utilities.get_move_priority(
+            current_best_move
+        ) > 0 or utilities.get_effective_speed(
+            battle.active_pokemon,
+            battle,
+        ) >= utilities.get_effective_speed(
+            battle.opponent_active_pokemon,
+            battle,
         )
 
         if self.debug_enabled:

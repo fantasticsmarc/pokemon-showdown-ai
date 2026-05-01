@@ -1,28 +1,20 @@
 from poke_env.battle.move_category import MoveCategory
 from poke_env.battle.move import DynamaxMove
 from poke_env.battle.effect import Effect
+from poke_env.battle.pokemon_type import PokemonType
 from poke_env.battle.side_condition import SideCondition
 from poke_env.data.gen_data import GenData
 from math import floor
 
-import battle.buffs as buffs
-import battle.debuffs as debuffs
-import battle.habilities as habilities
+import battle.ability_effects as ability_effects
+import battle.move_effects as move_effects
 
 TYPE_CHART = GenData.from_gen(9).type_chart
-PROTECT_LIKE_EFFECTS = {
-    Effect.PROTECT,
-    Effect.BANEFUL_BUNKER,
-    Effect.KINGS_SHIELD,
-    Effect.OBSTRUCT,
-    Effect.SILK_TRAP,
-    Effect.SPIKY_SHIELD,
-}
 
 
 # Safely read a stat from a dict and fall back to a default value when missing.
 def safe_stat(stat_dict, stat_name, default=0):
-    """Safely get a stat value, returning default if None or missing."""
+    # Safely get a stat value, returning default if None or missing.
     value = stat_dict.get(stat_name)
     return value if value is not None else default
 
@@ -169,21 +161,56 @@ def get_defensive_type_multiplier(my_pokemon, opponent_pokemon):
     return max(multiplier1, multiplier2)
 
 
+# Read the Pokemon's current defensive types, including Tera and temporary type changes.
+def get_current_types(pokemon):
+    return (
+        [pokemon.type_1] if pokemon.type_2 is None else [pokemon.type_1, pokemon.type_2]
+    )
+
+
+# Safely compute a move/type multiplier into a Pokemon's current typing.
+def get_current_type_multiplier(target_pokemon, type_or_move):
+    try:
+        return target_pokemon.damage_multiplier(type_or_move)
+    except Exception:
+        return 1.0
+
+
+# Read a move property defensively because forced moves like Recharge may have sparse data.
+def safe_move_attr(move, attr_name, default=None):
+    try:
+        return getattr(move, attr_name)
+    except (KeyError, AttributeError, TypeError):
+        return default
+
+
+# Return the category of a move, defaulting to status for sparse forced actions.
+def get_move_category(move):
+    return safe_move_attr(move, "category", MoveCategory.STATUS)
+
+
+# Return the priority of a move without crashing on sparse forced actions.
+def get_move_priority(move):
+    return safe_move_attr(move, "priority", 0)
+
+
 # Estimate move damage with a simplified damage formula and partial information.
 def calculate_damage(move, attacker, defender, pessimistic, is_bot_turn):
     # Calculate damage of a move using the official Pokemon damage formula and handles estimation for unknown opponent stats.
+    move_category = get_move_category(move)
+    move_type = safe_move_attr(move, "type")
 
     # Status moves don't do damage
-    if move.category == MoveCategory.STATUS:
+    if move_category == MoveCategory.STATUS or move_type is None:
         return 0
 
     # Start with base power
-    damage = move.base_power
+    damage = safe_move_attr(move, "base_power", 0)
 
     # Apply attack/defense ratio based on move category
-    if move.category == MoveCategory.PHYSICAL:
+    if move_category == MoveCategory.PHYSICAL:
         ratio = calculate_physical_ratio(attacker, defender, is_bot_turn)
-    elif move.category == MoveCategory.SPECIAL:
+    elif move_category == MoveCategory.SPECIAL:
         ratio = calculate_special_ratio(attacker, defender, is_bot_turn)
     else:
         ratio = 1  # Shouldn't happen for non-status moves
@@ -204,11 +231,11 @@ def calculate_damage(move, attacker, defender, pessimistic, is_bot_turn):
         damage *= 0.925  # Average damage roll
 
     # Apply STAB
-    if move.type == attacker.type_1 or move.type == attacker.type_2:
+    if move_type == attacker.type_1 or move_type == attacker.type_2:
         damage *= 1.5
 
     # Apply type effectiveness
-    type_multiplier = defender.damage_multiplier(move)
+    type_multiplier = get_current_type_multiplier(defender, move)
     damage *= type_multiplier
 
     # Ensure minimum damage of 1
@@ -217,23 +244,26 @@ def calculate_damage(move, attacker, defender, pessimistic, is_bot_turn):
 
 # Estimate actual expected damage after accuracy and ability modifiers.
 def estimate_damage_output(move, attacker, defender, battle, is_bot_turn):
-    if move.category == MoveCategory.STATUS:
+    move_category = get_move_category(move)
+    move_type = safe_move_attr(move, "type")
+
+    if move_category == MoveCategory.STATUS or move_type is None:
         return 0
 
     # We intentionally use a simplified damage score instead of pretending to know the exact HP damage. The previous "realistic" formula was far too unstable with partial information and produced absurd values.
-    damage_score = move.base_power * move.accuracy / 2
+    damage_score = safe_move_attr(move, "base_power", 0) * safe_move_attr(move, "accuracy", 1.0) / 2
 
-    if move.type == attacker.type_1 or move.type == attacker.type_2:
+    if move_type == attacker.type_1 or move_type == attacker.type_2:
         damage_score *= 1.5
-    if attacker.is_terastallized and attacker.tera_type == move.type:
+    if attacker.is_terastallized and attacker.tera_type == move_type:
         damage_score *= 1.3
 
-    damage_score *= defender.damage_multiplier(move)
+    damage_score *= get_current_type_multiplier(defender, move)
 
-    if move.category == MoveCategory.PHYSICAL:
+    if move_category == MoveCategory.PHYSICAL:
         attack_stage = attacker.boosts.get("atk", 0)
         defense_stage = defender.boosts.get("def", 0)
-    elif move.category == MoveCategory.SPECIAL:
+    elif move_category == MoveCategory.SPECIAL:
         attack_stage = attacker.boosts.get("spa", 0)
         defense_stage = defender.boosts.get("spd", 0)
     else:
@@ -246,7 +276,7 @@ def estimate_damage_output(move, attacker, defender, battle, is_bot_turn):
     )
     damage_score *= get_offensive_ability_multiplier(attacker, defender, move, battle)
     damage_score *= get_defensive_ability_multiplier(defender, move)
-    damage_score *= move.expected_hits
+    damage_score *= safe_move_attr(move, "expected_hits", 1)
     return max(damage_score, 0)
 
 
@@ -258,11 +288,7 @@ def estimate_damage_percent(move, attacker, defender, battle, is_bot_turn):
 
 # Return the known ability or, if still hidden, the most likely ability candidate.
 def get_pokemon_ability(pokemon):
-    if pokemon.ability:
-        return pokemon.ability
-    if pokemon.possible_abilities:
-        return pokemon.possible_abilities[0]
-    return None
+    return ability_effects.get_known_ability(pokemon)
 
 
 # Convert stat stages into their numeric multiplier equivalent.
@@ -333,9 +359,258 @@ def get_status_score(pokemon):
     return -0.5
 
 
+# Estimate how useful it is to heal right now.
+def get_healing_value(move, attacker, battle, setup_safety=1.0, immediate=False):
+    # poke_env exposes direct recovery through move.heal; for dynamic recovery
+    # moves we use a small fallback table in move_effects.py.
+    heal_fraction = safe_move_attr(
+        move,
+        "heal",
+        0,
+    ) or move_effects.HEALING_MOVE_FALLBACKS.get(move.id, 0)
+    if not heal_fraction:
+        return 0.0
+
+    missing_hp = 1 - attacker.current_hp_fraction
+    if missing_hp <= 0.08:
+        return -8.0
+
+    value = heal_fraction * missing_hp * 135
+
+    # Healing is most urgent when low, but risky healing should still respect
+    # whether the current turn is safe enough to spend on recovery.
+    if attacker.current_hp_fraction <= 0.28:
+        value += 26
+    elif attacker.current_hp_fraction <= 0.45:
+        value += 14
+
+    if move.id in move_effects.DELAYED_HEALING_MOVES:
+        value *= 0.65
+    if move.id in move_effects.SELF_SLEEP_HEALING_MOVES:
+        value *= 0.75
+        if attacker.status is not None:
+            value += 14
+
+    if immediate:
+        value *= 0.55
+    else:
+        value *= setup_safety
+
+    return value
+
+
+# Estimate the value of inflicting a major status condition on the opponent.
+def get_status_infliction_value(status, attacker, defender, battle, chance=1.0):
+    if status is None or defender.status is not None:
+        return 0.0
+
+    # poke_env returns Status objects for move.status, but secondary effects in
+    # the move database store raw strings like "brn" or "par".
+    status_name = status if isinstance(status, str) else status.name
+    status_name = status_name.lower()
+    value = move_effects.STATUS_INFLICTION_VALUES.get(status_name, 28)
+
+    # Burn is especially strong into physical attackers, paralysis into faster
+    # targets, and poison/toxic into bulky targets that may stay around.
+    if status_name == "brn" and safe_stat(defender.stats, "atk") >= safe_stat(
+        defender.stats,
+        "spa",
+    ):
+        value += 12
+    if status_name == "par" and get_effective_speed(
+        defender,
+        battle,
+    ) > get_effective_speed(attacker, battle):
+        value += 14
+    if status_name in {"psn", "tox"} and defender.current_hp_fraction >= 0.55:
+        value += 10
+
+    return value * chance
+
+
+# Estimate how useful it is to lower the opponent's stats.
+def get_target_debuff_value(boosts, attacker, defender, battle, chance=1.0):
+    if not boosts:
+        return 0.0
+
+    defender_ability = get_pokemon_ability(defender)
+    if defender_ability == "contrary":
+        return -24.0 * chance
+    if defender_ability in {"mirrorarmor", "magicbounce"}:
+        return -18.0 * chance
+    if defender_ability == "defiant" and any(stage < 0 for stage in boosts.values()):
+        return -28.0 * chance
+    if defender_ability == "competitive" and any(stage < 0 for stage in boosts.values()):
+        return -28.0 * chance
+
+    value = 0.0
+    for stat, stage in boosts.items():
+        current_stage = defender.boosts.get(stat, 0)
+        stat_weight = move_effects.TARGET_DEBUFF_STAT_VALUES.get(stat, 12)
+
+        if stage < 0:
+            # Stat drops lose value once the target is already heavily debuffed.
+            remaining_drop_room = max(0, current_stage + 6)
+            useful_stage_change = min(abs(stage), remaining_drop_room)
+            value += useful_stage_change * stat_weight
+        elif stage > 0:
+            value -= stage * stat_weight
+
+    if get_effective_speed(defender, battle) > get_effective_speed(attacker, battle):
+        value *= 1.08
+
+    return value * chance
+
+
+# Convert known secondary effects into extra move value.
+def get_secondary_utility_value(move, attacker, defender, battle):
+    secondary_value = 0.0
+
+    for secondary in safe_move_attr(move, "secondary", []):
+        chance = secondary.get("chance", 100) / 100
+
+        # Debuffs on the target matter a lot because they affect the next turn immediately.
+        if "boosts" in secondary and secondary["boosts"]:
+            secondary_value += get_target_debuff_value(
+                secondary["boosts"],
+                attacker,
+                defender,
+                battle,
+                chance,
+            )
+
+        # Status from an attacking move is strong tempo, especially if the target is not already statused.
+        if secondary.get("status") is not None:
+            secondary_value += get_status_infliction_value(
+                secondary.get("status"),
+                attacker,
+                defender,
+                battle,
+                chance,
+            )
+
+        if secondary.get("volatileStatus") is not None:
+            secondary_value += 12 * chance
+
+        if secondary.get("self") and secondary["self"].get("boosts"):
+            stage_value = sum(secondary["self"]["boosts"].values())
+            secondary_value += stage_value * 14 * chance
+
+    return secondary_value
+
+
+# Score setup stats by how immediately useful they are for the user's current set.
+def get_setup_stat_value(boosts, attacker):
+    if not boosts:
+        return 0.0
+
+    known_moves = get_known_moves_safely(attacker)
+    has_physical_move = any(
+        get_move_category(move) == MoveCategory.PHYSICAL for move in known_moves
+    )
+    has_special_move = any(
+        get_move_category(move) == MoveCategory.SPECIAL for move in known_moves
+    )
+    value = 0.0
+
+    for stat, stage in boosts.items():
+        if stage <= 0:
+            continue
+        if stat == "atk" and has_physical_move:
+            value += stage * 24
+        elif stat == "spa" and has_special_move:
+            value += stage * 24
+        elif stat == "spe":
+            value += stage * 22
+        elif stat in move_effects.SETUP_DEFENSE_STATS:
+            value += stage * 16
+        elif stat == "accuracy":
+            value += stage * 9
+        else:
+            value += stage * 10
+
+    return value
+
+
+# Count how many opponent Pokemon are still alive so hazard value scales with future switch opportunities.
+def count_remaining_opponent_pokemon(battle):
+    return sum(1 for pokemon in battle.opponent_team.values() if not pokemon.fainted)
+
+
+# Estimate the strategic value of setting a specific hazard right now.
+def get_hazard_setup_value(move, battle):
+    side_condition = safe_move_attr(move, "side_condition")
+    if side_condition not in move_effects.HAZARD_SIDE_CONDITIONS:
+        return 0.0
+
+    existing_condition = battle.opponent_side_conditions.get(side_condition, 0)
+    remaining_targets = count_remaining_opponent_pokemon(battle)
+    value = max(remaining_targets - 1, 0) * 10
+    opponent = battle.opponent_active_pokemon
+
+    # If the current target is already close to being removed, immediate damage
+    # is usually a better tempo play than spending the turn on long-term chip.
+    if opponent.current_hp_fraction <= 0.35:
+        value *= 0.45
+
+    # Hazards are best early or mid game. With few targets left, the value drops
+    # sharply unless the layer is especially impactful.
+    if remaining_targets <= 2:
+        value *= 0.55
+
+    # First hazard layer is usually the most impactful, extra layers still help
+    # but should not endlessly dominate the heuristic.
+    if side_condition == SideCondition.STEALTH_ROCK:
+        if side_condition in battle.opponent_side_conditions:
+            return 0.0
+        return value + 18
+
+    if side_condition == SideCondition.SPIKES:
+        if existing_condition >= 3:
+            return 0.0
+        return value + 12 - existing_condition * 2
+
+    if side_condition == SideCondition.TOXIC_SPIKES:
+        if existing_condition >= 2:
+            return 0.0
+        return value + 10 - existing_condition * 2
+
+    if side_condition == SideCondition.STICKY_WEB:
+        if side_condition in battle.opponent_side_conditions:
+            return 0.0
+        return value + 14
+
+    return 0.0
+
+
 # Detect if the target is currently behind a protect-like effect this turn.
 def opponent_is_protected(pokemon):
-    return any(effect in PROTECT_LIKE_EFFECTS for effect in pokemon.effects)
+    return any(effect in move_effects.PROTECT_LIKE_EFFECTS for effect in pokemon.effects)
+
+
+# Detect if the target is currently behind a substitute.
+def opponent_has_substitute(pokemon):
+    return Effect.SUBSTITUTE in pokemon.effects
+
+
+# Detect whether a move is one of the common protect-like actions.
+def is_protect_like_move(move):
+    if safe_move_attr(move, "is_protect_move", False):
+        return True
+    return move.id in {
+        "protect",
+        "detect",
+        "kingsshield",
+        "spikyshield",
+        "banefulbunker",
+        "obstruct",
+        "silktrap",
+    }
+
+
+# Detect whether a move is Substitute.
+def is_substitute_move(move):
+    return move.id == "substitute" or safe_move_attr(move, "volatile_status") == Effect.SUBSTITUTE
 
 
 # Convert remaining HP into a compact score for the heuristic.
@@ -373,7 +648,7 @@ def get_speed_ability_multiplier(pokemon, battle):
     if not ability:
         return 1.0
 
-    tempo_buffs = buffs.ABILITY_SPEED_TEMPO_BUFFS.get(ability, {})
+    tempo_buffs = ability_effects.get_effect_data("speed_tempo_buffs", ability, {})
     if ability == "swiftswim" and is_weather_active(battle, "raindance"):
         return tempo_buffs.get("spe", 1.0)
     if ability == "chlorophyll" and is_weather_active(battle, "sunnyday"):
@@ -416,23 +691,32 @@ def get_offensive_ability_multiplier(attacker, defender, move, battle):
         return 1.0
 
     multiplier = 1.0
+    move_category = get_move_category(move)
+    move_type = safe_move_attr(move, "type")
+    move_base_power = safe_move_attr(move, "base_power", 0)
 
-    type_multiplier_data = habilities.ABILITY_ATTACK_TYPE_MULTIPLIERS.get(ability)
-    if type_multiplier_data:
-        move_type = move.type.name.lower()
-        if move_type in type_multiplier_data:
+    type_multiplier_data = ability_effects.get_effect_data(
+        "attack_type_multipliers",
+        ability,
+    )
+    if type_multiplier_data and move_type is not None:
+        move_type_name = move_type.name.lower()
+        if move_type_name in type_multiplier_data:
             hp_threshold = type_multiplier_data.get("hp_below")
             if hp_threshold is None or attacker.current_hp_fraction <= hp_threshold:
-                multiplier *= type_multiplier_data[move_type]
+                multiplier *= type_multiplier_data[move_type_name]
 
-    move_multiplier_data = habilities.ABILITY_ATTACK_MOVE_MULTIPLIERS.get(ability)
+    move_multiplier_data = ability_effects.get_effect_data(
+        "attack_move_multipliers",
+        ability,
+    )
     if move_multiplier_data:
         if ability == "adaptability" and (
-            move.type == attacker.type_1 or move.type == attacker.type_2
+            move_type == attacker.type_1 or move_type == attacker.type_2
         ):
             multiplier *= 4 / 3
         elif move_multiplier_data.get("base_power_at_most") is not None:
-            if move.base_power <= move_multiplier_data["base_power_at_most"]:
+            if move_base_power <= move_multiplier_data["base_power_at_most"]:
                 multiplier *= move_multiplier_data.get("multiplier", 1.0)
         elif ability == "analytic" and move_multiplier_data.get("when_moving_last"):
             if get_effective_speed(attacker, battle) < get_effective_speed(
@@ -440,37 +724,37 @@ def get_offensive_ability_multiplier(attacker, defender, move, battle):
             ):
                 multiplier *= move_multiplier_data.get("multiplier", 1.0)
 
-    stat_modifier_data = habilities.ABILITY_STAT_MODIFIERS.get(ability)
+    stat_modifier_data = ability_effects.get_effect_data("stat_modifiers", ability)
     if stat_modifier_data:
         if (
             ability == "guts"
             and attacker.status is not None
-            and move.category == MoveCategory.PHYSICAL
+            and move_category == MoveCategory.PHYSICAL
         ):
             multiplier *= stat_modifier_data.get("atk", 1.0)
         elif (
             ability == "flareboost"
             and attacker.status is not None
-            and move.category == MoveCategory.SPECIAL
+            and move_category == MoveCategory.SPECIAL
         ):
             multiplier *= stat_modifier_data.get("spa", 1.0)
         elif (
             ability == "toxicboost"
             and attacker.status is not None
-            and move.category == MoveCategory.PHYSICAL
+            and move_category == MoveCategory.PHYSICAL
         ):
             multiplier *= stat_modifier_data.get("atk", 1.0)
         elif (
             ability == "solarpower"
             and is_weather_active(battle, "sunnyday")
-            and move.category == MoveCategory.SPECIAL
+            and move_category == MoveCategory.SPECIAL
         ):
             multiplier *= stat_modifier_data.get("spa", 1.0)
-        elif ability == "hustle" and move.category == MoveCategory.PHYSICAL:
+        elif ability == "hustle" and move_category == MoveCategory.PHYSICAL:
             multiplier *= stat_modifier_data.get("atk", 1.0)
         elif ability == "supremeoverlord":
             multiplier *= 1.1
-        elif ability == "gorillatactics" and move.category == MoveCategory.PHYSICAL:
+        elif ability == "gorillatactics" and move_category == MoveCategory.PHYSICAL:
             multiplier *= stat_modifier_data.get("atk", 1.0)
 
     return multiplier
@@ -482,38 +766,52 @@ def get_defensive_ability_multiplier(defender, move):
     if not ability:
         return 1.0
 
-    move_type = move.type.name.lower()
+    move_category = get_move_category(move)
+    move_type = safe_move_attr(move, "type")
+    if move_type is None:
+        return 1.0
 
-    if ability in habilities.ABILITY_NEGATES:
-        if move_type in habilities.ABILITY_NEGATES[ability]:
-            return 0.0
+    move_type_name = move_type.name.lower()
 
-    if ability in habilities.ABILITY_HEALS_FROM_TYPE:
-        if move_type in habilities.ABILITY_HEALS_FROM_TYPE[ability]:
-            return 0.0
+    if ability_effects.blocks_type(ability, move_type_name):
+        return 0.0
+
+    if ability_effects.heals_from_type(ability, move_type_name):
+        return 0.0
 
     multiplier = 1.0
 
-    defense_multiplier_data = habilities.ABILITY_DEFENSE_MULTIPLIERS.get(ability)
+    defense_multiplier_data = ability_effects.get_effect_data(
+        "defense_multipliers",
+        ability,
+    )
     if defense_multiplier_data:
-        if move_type in defense_multiplier_data:
-            multiplier *= defense_multiplier_data[move_type]
+        if move_type_name in defense_multiplier_data:
+            multiplier *= defense_multiplier_data[move_type_name]
         if (
-            move.category == MoveCategory.PHYSICAL
+            move_category == MoveCategory.PHYSICAL
             and "physical" in defense_multiplier_data
         ):
             multiplier *= defense_multiplier_data["physical"]
         if (
-            move.category == MoveCategory.SPECIAL
+            move_category == MoveCategory.SPECIAL
             and "special" in defense_multiplier_data
         ):
             multiplier *= defense_multiplier_data["special"]
 
     if defender.current_hp_fraction == 1.0:
-        multiplier *= habilities.ABILITY_FULL_HP_REDUCTION.get(ability, 1.0)
+        multiplier *= ability_effects.get_effect_data(
+            "full_hp_reduction",
+            ability,
+            1.0,
+        )
 
-    if defender.damage_multiplier(move) > 1:
-        multiplier *= habilities.ABILITY_REDUCE_SUPER_EFFECTIVE.get(ability, 1.0)
+    if get_current_type_multiplier(defender, move) > 1:
+        multiplier *= ability_effects.get_effect_data(
+            "reduce_super_effective",
+            ability,
+            1.0,
+        )
 
     return multiplier
 
@@ -527,10 +825,13 @@ def daniela(
     is_bot_turn,
     include_setup_safety=True,
 ):
-    if move.current_pp == 0:
+    current_pp = safe_move_attr(move, "current_pp", 1)
+    move_category = get_move_category(move)
+
+    if current_pp == 0:
         return float("-inf")
 
-    if move.category == MoveCategory.STATUS:
+    if move_category == MoveCategory.STATUS:
         # Status moves are scored by the utility they create this turn, such as boosting, healing or inflicting a new status.
         # When this function is called inside broader matchup estimates we avoid recursively asking for setup safety again, otherwise status-move evaluation can loop through threat estimation forever.
         setup_safety = (
@@ -539,33 +840,69 @@ def daniela(
             else 1.0
         )
         value = 0.0
-        if move.self_boost:
+        self_boost = safe_move_attr(move, "self_boost")
+        boosts = safe_move_attr(move, "boosts")
+        status = safe_move_attr(move, "status")
+        heal = safe_move_attr(move, "heal", 0)
+        side_condition = safe_move_attr(move, "side_condition")
+
+        if self_boost:
             # Self boosts are strongest in calm turns where we can expect to stay on the field long enough to cash them in.
-            value += sum(move.self_boost.values()) * 32 * setup_safety
-        if move.boosts:
+            value += get_setup_stat_value(self_boost, attacker) * setup_safety
+        if boosts:
             # Target debuffs matter immediately, so they stay valuable even when setup is slightly risky.
-            value += sum(-stage for stage in move.boosts.values()) * 24
-        if move.status is not None and defender.status is None:
-            value += 42
-        if move.heal:
-            missing_hp = 1 - attacker.current_hp_fraction
-            value += move.heal * missing_hp * 120
-        if (
-            move.side_condition
-            and move.side_condition not in battle.opponent_side_conditions
+            value += get_target_debuff_value(boosts, attacker, defender, battle)
+        if status is not None:
+            value += get_status_infliction_value(status, attacker, defender, battle)
+        if heal or move.id in move_effects.HEALING_MOVE_FALLBACKS:
+            value += get_healing_value(move, attacker, battle, setup_safety)
+        if side_condition:
+            # Hazards scale with how many opposing Pokemon are still available to
+            # be chipped by future switches.
+            value += get_hazard_setup_value(move, battle)
+        if safe_move_attr(move, "weather") is not None:
+            value += 12
+        if safe_move_attr(move, "terrain") is not None:
+            value += 12
+        if safe_move_attr(move, "volatile_status") is not None and not (
+            is_substitute_move(move) or is_protect_like_move(move)
         ):
-            # Entry hazards and similar side conditions create delayed value across future turns, so we reward them explicitly here.
-            value += 34
-        if move.weather is not None:
-            value += 12
-        if move.terrain is not None:
-            value += 12
-        if move.volatile_status is not None:
             value += 16
-        if move.priority > 0:
-            value += move.priority * 10
-        if move.self_switch:
+        if get_move_priority(move) > 0:
+            value += get_move_priority(move) * 10
+        if safe_move_attr(move, "self_switch"):
             value += 10
+        if is_substitute_move(move):
+            if (
+                Effect.SUBSTITUTE not in attacker.effects
+                and attacker.current_hp_fraction >= 0.55
+                and setup_safety >= 0.8
+            ):
+                value += 42 * setup_safety
+            else:
+                value -= 20
+        if is_protect_like_move(move):
+            # Protect-like moves are mainly useful for stalling a threatening turn,
+            # scouting, or squeezing recovery/status turns.
+            if include_setup_safety:
+                opponent_threat = get_opponent_threat_value(defender, attacker, battle)
+                if opponent_threat >= estimate_current_hp(attacker) * 0.45:
+                    value += 28
+            if attacker.current_hp_fraction <= 0.35:
+                value += 12
+            if attacker.item == "leftovers":
+                value += 8
+            if defender.status is not None:
+                value += 8
+            if attacker.protect_counter > 0:
+                value -= 18 * attacker.protect_counter
+        if safe_move_attr(move, "force_switch", False):
+            value += 20 if count_remaining_opponent_pokemon(battle) > 2 else 8
+
+        # Calm setup turns deserve a small baseline bonus so the bot does not
+        # always default to chip damage in good boosting positions.
+        if self_boost and setup_safety >= 0.95:
+            value += 14
 
         # If the rival is pressing us too hard, setup and utility moves lose value so the bot stops over-greeding in dangerous positions.
         if setup_safety < 0.6:
@@ -586,33 +923,50 @@ def daniela(
     value = damage_percent
 
     # If the opponent is currently protected, attacking into it is usually bad unless the chosen move is specifically meant to break that protection.
-    if opponent_is_protected(defender) and not move.breaks_protect:
+    if opponent_is_protected(defender) and not safe_move_attr(move, "breaks_protect", False):
         value *= 0.15
 
     # Give a clear boost to super effective hits and penalize resisted ones so the bot behaves more like "find the strong effective attack" again.
-    effectiveness = defender.damage_multiplier(move)
+    effectiveness = get_current_type_multiplier(defender, move)
+    if effectiveness == 0:
+        return float("-inf")
     if effectiveness > 1:
         value += 18 * effectiveness
     elif effectiveness < 1:
         value -= 14 * (1 / max(effectiveness, 0.25))
 
-    if move.drain:
-        value += damage_percent * move.drain * 0.35
-    if move.heal:
-        missing_hp = 1 - attacker.current_hp_fraction
-        value += move.heal * missing_hp * 60
-    if move.self_boost:
-        value += sum(move.self_boost.values()) * 10
-    if move.boosts:
-        value += sum(-stage for stage in move.boosts.values()) * 8
-    if move.status is not None and defender.status is None:
-        value += 20
-    if move.priority > 0:
-        value += move.priority * 8
-    if move.recoil:
-        value -= damage_percent * move.recoil * 0.3
-    if move.secondary:
-        value += 8
+    # Damaging attacks into Substitute lose a lot of utility if they are mainly
+    # trying to inflict status or drops rather than simply breaking the doll.
+    if opponent_has_substitute(defender):
+        value *= 0.75
+        if safe_move_attr(move, "status") is not None:
+            value *= 0.5
+
+    drain = safe_move_attr(move, "drain", 0)
+    heal = safe_move_attr(move, "heal", 0)
+    self_boost = safe_move_attr(move, "self_boost")
+    boosts = safe_move_attr(move, "boosts")
+    status = safe_move_attr(move, "status")
+    recoil = safe_move_attr(move, "recoil", 0)
+    secondary = safe_move_attr(move, "secondary", [])
+
+    if drain:
+        value += damage_percent * drain * 0.35
+    if heal:
+        value += get_healing_value(move, attacker, battle, immediate=True)
+    if self_boost:
+        value += get_setup_stat_value(self_boost, attacker) * 0.45
+    if boosts:
+        value += get_target_debuff_value(boosts, attacker, defender, battle) * 0.65
+    if status is not None:
+        value += get_status_infliction_value(status, attacker, defender, battle) * 0.7
+    if get_move_priority(move) > 0:
+        value += get_move_priority(move) * 8
+    if recoil:
+        value -= damage_percent * recoil * 0.3
+    if secondary:
+        secondary_value = get_secondary_utility_value(move, attacker, defender, battle)
+        value += 4 + secondary_value
 
     return value
 
@@ -655,7 +1009,8 @@ def estimate_unrevealed_stab_pressure(attacker, defender, battle):
 
     # We approximate hidden pressure with a medium-strong STAB attack so the bot respects dangerous typings before every move is revealed.
     best_multiplier = max(
-        defender.damage_multiplier(attacking_type) for attacking_type in attacking_types
+        get_current_type_multiplier(defender, attacking_type)
+        for attacking_type in attacking_types
     )
     atk_pressure = safe_stat(attacker.stats, "atk") or estimate_opponent_stat(
         attacker, "atk", assume_max_ivs_evs=True, beneficial_nature=True
@@ -697,9 +1052,9 @@ def get_opponent_threat_value(opponent_pokemon, my_pokemon, battle):
 # Detect whether the opponent has already revealed a super effective attack into us.
 def opponent_has_known_super_effective_move(opponent_pokemon, my_pokemon):
     for move in get_known_moves_safely(opponent_pokemon):
-        if move.category == MoveCategory.STATUS:
+        if get_move_category(move) == MoveCategory.STATUS:
             continue
-        if my_pokemon.damage_multiplier(move) > 1:
+        if get_current_type_multiplier(my_pokemon, move) > 1:
             return True
     return False
 
@@ -709,7 +1064,7 @@ def opponent_has_super_effective_stab(opponent_pokemon, my_pokemon):
     for attacking_type in [opponent_pokemon.type_1, opponent_pokemon.type_2]:
         if attacking_type is None:
             continue
-        if my_pokemon.damage_multiplier(attacking_type) > 1:
+        if get_current_type_multiplier(my_pokemon, attacking_type) > 1:
             return True
     return False
 
@@ -753,7 +1108,8 @@ def get_known_move_defensive_multiplier(target_type, opponent_pokemon):
     attacking_moves = [
         move
         for move in get_known_moves_safely(opponent_pokemon)
-        if move.category != MoveCategory.STATUS
+        if get_move_category(move) != MoveCategory.STATUS
+        and safe_move_attr(move, "type") is not None
     ]
 
     if not attacking_moves:
@@ -761,28 +1117,28 @@ def get_known_move_defensive_multiplier(target_type, opponent_pokemon):
 
     # We only care about the scariest known move because switching decisions should be robust against the worst immediate punish we have seen so far.
     return max(
-        move.type.damage_multiplier(target_type, type_chart=TYPE_CHART)
+        safe_move_attr(move, "type").damage_multiplier(target_type, type_chart=TYPE_CHART)
         for move in attacking_moves
     )
 
 
 # Check whether the current best move is likely to finish the target immediately.
 def is_best_move_likely_to_ko(attacker, defender, move, battle):
-    if move is None or move.category == MoveCategory.STATUS:
+    if move is None or get_move_category(move) == MoveCategory.STATUS:
         return False
 
     expected_damage = estimate_damage_percent(move, attacker, defender, battle, True)
     defender_remaining_percent = defender.current_hp_fraction * 100
-    effectiveness = defender.damage_multiplier(move)
+    effectiveness = get_current_type_multiplier(defender, move)
 
     # We keep this rule intentionally conservative because a false positive here is costly: the bot stays in and attacks when it should have switched.
     if defender.current_hp_fraction > 0.35:
         return False
     if effectiveness < 1 and defender.current_hp_fraction > 0.1:
         return False
-    if move.base_power < 45 and defender.current_hp_fraction > 0.1:
+    if safe_move_attr(move, "base_power", 0) < 45 and defender.current_hp_fraction > 0.1:
         return False
-    if move.accuracy < 0.9 and defender.current_hp_fraction > 0.12:
+    if safe_move_attr(move, "accuracy", 1.0) < 0.9 and defender.current_hp_fraction > 0.12:
         return False
     if expected_damage < 18:
         return False
@@ -792,7 +1148,7 @@ def is_best_move_likely_to_ko(attacker, defender, move, battle):
 
 # Expose the KO-rule inputs so SmartBot can print exactly why the finisher rule did or did not trigger.
 def get_ko_debug_data(attacker, defender, move, battle):
-    if move is None or move.category == MoveCategory.STATUS:
+    if move is None or get_move_category(move) == MoveCategory.STATUS:
         return {
             "expected_damage": 0,
             "damage_percent": 0,
@@ -808,7 +1164,7 @@ def get_ko_debug_data(attacker, defender, move, battle):
             move, attacker, defender, battle, True
         ),
         "remaining_hp": defender.current_hp_fraction * 100,
-        "effectiveness": defender.damage_multiplier(move),
+        "effectiveness": get_current_type_multiplier(defender, move),
     }
 
 
@@ -851,8 +1207,12 @@ def tera_improves_offense(attacker, move):
     if attacker.tera_type is None:
         return False
 
+    move_type = safe_move_attr(move, "type")
+    if move_type is None:
+        return False
+
     tera_type_name = attacker.tera_type.name.lower()
-    move_type_name = move.type.name.lower()
+    move_type_name = move_type.name.lower()
     current_types = {
         attacker.type_1.name.lower() if attacker.type_1 else None,
         attacker.type_2.name.lower() if attacker.type_2 else None,
@@ -862,7 +1222,24 @@ def tera_improves_offense(attacker, move):
         return False
 
     # Tera is especially valuable when it turns a non-STAB move into STAB or when it reinforces a same-type attack on a crucial turn.
-    return move_type_name not in current_types or move.base_power >= 80
+    return move_type_name not in current_types or safe_move_attr(move, "base_power", 0) >= 80
+
+
+# Estimate how much extra offensive value Tera adds to the selected move.
+def get_tera_offensive_bonus(attacker, defender, move, battle):
+    if attacker.tera_type is None or attacker.is_terastallized:
+        return 0.0
+
+    move_type = safe_move_attr(move, "type")
+    if move_type is None or attacker.tera_type != move_type:
+        return 0.0
+
+    base_damage = estimate_damage_percent(move, attacker, defender, battle, True)
+    current_stab = 1.5 if move_type in get_current_types(attacker) else 1.0
+    tera_stab = 2.0 if move_type in attacker.original_types else 1.5
+    stab_gain = max(tera_stab / current_stab - 1, 0)
+
+    return base_damage * stab_gain + (8 if tera_improves_offense(attacker, move) else 0)
 
 
 # Estimate the turn value of using Tera on the chosen move.
@@ -875,10 +1252,12 @@ def estimate_tera_move_value(battle, move, move_value):
 
     # We start from the normal move value and then add only the extra value created by Tera, so we can compare fairly against the non-Tera option.
     tera_value = move_value
-    if tera_improves_offense(attacker, move):
-        tera_value += (
-            estimate_damage_output(move, attacker, defender, battle, True) * 0.35
-        )
+    tera_value += get_tera_offensive_bonus(attacker, defender, move, battle)
+
+    # Reward Tera a bit more when it helps convert a neutral turn into a clearly
+    # stronger offensive one.
+    if get_current_type_multiplier(defender, move) > 1:
+        tera_value += 10
     tera_value += get_tera_defensive_bonus(attacker, defender)
     return tera_value
 
@@ -922,23 +1301,26 @@ def estimate_z_move_value(battle, move, move_value, current_matchup_score):
     if move not in attacker.available_z_moves:
         return float("-inf")
 
-    if move.category == MoveCategory.STATUS:
+    if get_move_category(move) == MoveCategory.STATUS:
         # Status Z-Moves often provide special boosts or effects.
         z_value = move_value
-        if move.z_move_boost:
-            z_value += sum(move.z_move_boost.values()) * 18
-        if move.z_move_effect is not None:
+        z_move_boost = safe_move_attr(move, "z_move_boost")
+        if z_move_boost:
+            z_value += sum(z_move_boost.values()) * 18
+        if safe_move_attr(move, "z_move_effect") is not None:
             z_value += 22
         return z_value
 
     base_damage = estimate_damage_output(move, attacker, defender, battle, True)
-    if move.base_power <= 0 or move.z_move_power <= 0:
+    base_power = safe_move_attr(move, "base_power", 0)
+    z_move_power = safe_move_attr(move, "z_move_power", 0)
+    if base_power <= 0 or z_move_power <= 0:
         return float("-inf")
 
     # Approximate Z damage by scaling the normal move's expected damage to the Z-Move base power. It is not perfect but is much closer than using the regular move value directly.
-    z_damage = base_damage * (move.z_move_power / move.base_power)
+    z_damage = base_damage * (z_move_power / base_power)
     z_value = move_value + (z_damage - base_damage)
-    if z_damage >= estimate_remaining_hp(defender):
+    if z_damage >= defender.current_hp_fraction * 100:
         z_value += 18
     if current_matchup_score >= 18:
         z_value += 10
@@ -967,7 +1349,7 @@ def should_use_dynamax(
 
 # Estimate the turn value of Dynamax by looking at Max Move effects and survival value.
 def estimate_dynamax_move_value(battle, move, move_value, current_matchup_score):
-    if move.category == MoveCategory.STATUS:
+    if get_move_category(move) == MoveCategory.STATUS:
         return float("-inf")
 
     attacker = battle.active_pokemon
@@ -985,13 +1367,15 @@ def estimate_dynamax_move_value(battle, move, move_value, current_matchup_score)
     dynamax_value += (1 - attacker.current_hp_fraction) * 35
 
     # Max Moves can set weather/terrain or apply boosts/drops, so reward that utility explicitly instead of relying only on raw damage.
-    if max_move.self_boost:
-        dynamax_value += sum(max_move.self_boost.values()) * 12
-    if max_move.boosts:
-        dynamax_value += sum(-stage for stage in max_move.boosts.values()) * 10
-    if getattr(max_move, "weather", None) is not None:
+    max_move_self_boost = safe_move_attr(max_move, "self_boost")
+    max_move_boosts = safe_move_attr(max_move, "boosts")
+    if max_move_self_boost:
+        dynamax_value += sum(max_move_self_boost.values()) * 12
+    if max_move_boosts:
+        dynamax_value += sum(-stage for stage in max_move_boosts.values()) * 10
+    if safe_move_attr(max_move, "weather") is not None:
         dynamax_value += 10
-    if getattr(max_move, "terrain", None) is not None:
+    if safe_move_attr(max_move, "terrain") is not None:
         dynamax_value += 10
 
     if current_matchup_score >= 18:
@@ -1009,15 +1393,24 @@ def should_use_tera(
     defender_remaining_hp,
 ):
     attacker = battle.active_pokemon
-    likely_ko = estimated_damage >= defender_remaining_hp
+    defender_remaining_percent = (
+        battle.opponent_active_pokemon.current_hp_fraction * 100
+    )
+    likely_ko = estimated_damage >= defender_remaining_percent
     better_offense = tera_improves_offense(attacker, move)
-    dangerous_matchup = current_matchup_score >= 14
+    offensive_bonus = get_tera_offensive_bonus(
+        attacker,
+        battle.opponent_active_pokemon,
+        move,
+        battle,
+    )
+    dangerous_matchup = current_matchup_score >= 10
 
-    if better_offense and (likely_ko or move_value >= 65):
+    if better_offense and (likely_ko or move_value >= 52 or offensive_bonus >= 14):
         return True
     if better_offense and dangerous_matchup:
         return True
-    if get_tera_defensive_bonus(attacker, battle.opponent_active_pokemon) >= 8:
+    if get_tera_defensive_bonus(attacker, battle.opponent_active_pokemon) >= 6:
         return True
     return False
 
@@ -1028,8 +1421,8 @@ def choose_special_mechanic(battle, move, move_value, current_matchup_score):
     defender = battle.opponent_active_pokemon
 
     # Compute shared context once so all mechanic-specific heuristics compare against the same expected turn.
-    estimated_damage = estimate_damage_output(move, attacker, defender, battle, True)
-    defender_remaining_hp = estimate_remaining_hp(defender)
+    estimated_damage = estimate_damage_percent(move, attacker, defender, battle, True)
+    defender_remaining_hp = defender.current_hp_fraction * 100
     candidate_scores = {}
 
     if battle.can_mega_evolve:
@@ -1139,7 +1532,7 @@ def estimate_hazard_damage_fraction_on_switch(pokemon, battle):
 
     # Stealth Rock damage depends on Rock effectiveness against the incoming Pokemon.
     if SideCondition.STEALTH_ROCK in side_conditions:
-        damage_fraction += 0.125 * pokemon.damage_multiplier(TYPE_CHART["ROCK"])
+        damage_fraction += 0.125 * pokemon.damage_multiplier(PokemonType.ROCK)
 
     # Spikes only affects grounded Pokemon and scales with the number of layers.
     spikes_layers = side_conditions.get(SideCondition.SPIKES, 0)
@@ -1156,7 +1549,12 @@ def estimate_hazard_damage_fraction_on_switch(pokemon, battle):
 
 # Convert switch-in hazards into the same score scale used by matchup evaluation.
 def get_switch_hazard_penalty(pokemon, battle):
-    damage_fraction = estimate_hazard_damage_fraction_on_switch(pokemon, battle)
+    try:
+        damage_fraction = estimate_hazard_damage_fraction_on_switch(pokemon, battle)
+    except Exception:
+        # Hazards are only a secondary heuristic, so if something unexpected
+        # happens here we prefer to ignore the penalty rather than crash the bot.
+        damage_fraction = 0.0
     status_penalty = 0.0
     side_conditions = battle.side_conditions
 
@@ -1248,15 +1646,7 @@ def evaluate_pokemon_matchup(my_pokemon, opponent_pokemon, battle):
 
     my_ability = get_pokemon_ability(my_pokemon)
     opponent_ability = get_pokemon_ability(opponent_pokemon)
-
-    if my_ability in debuffs.ABILITY_DAMAGE_DEBUFFS:
-        score -= 6
-    if my_ability in buffs.ABILITY_SURVIVAL_BUFFS:
-        score -= 6
-    if opponent_ability in buffs.ABILITY_SURVIVAL_BUFFS:
-        score += 8
-    if opponent_ability in debuffs.ABILITY_DAMAGE_DEBUFFS:
-        score += 6
+    score += ability_effects.get_matchup_modifier(my_ability, opponent_ability)
     if battle.side_conditions:
         score += 4 * len(battle.side_conditions)
     if battle.opponent_side_conditions:

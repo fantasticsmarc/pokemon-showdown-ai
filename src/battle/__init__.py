@@ -1,1 +1,1 @@
-"""Battle logics and utilities for Pokemon Showdown"""
+"""Battle main logic for Pokemon Showdown."""

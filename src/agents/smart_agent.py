@@ -18,7 +18,7 @@ class SmartBot(Player):
     currentOpponent = None
     previousOpponent = None
     switch_margin = 12
-    debug_enabled = True
+    debug_enabled = False
 
     # Build the smart bot with the selected account and server configuration.
     def __init__(
@@ -33,6 +33,30 @@ class SmartBot(Player):
             server_configuration=server_configuration,
             start_timer_on_battle_start=True,
         )
+        self.current_battle_tag = None
+        self.previous_active = None
+        self.active_action_count = 0
+        self.active_first_turn = True
+
+    def update_active_turn_memory(self, battle):
+        battle_tag = getattr(battle, "battle_tag", None)
+        if battle_tag != self.current_battle_tag:
+            self.current_battle_tag = battle_tag
+            self.previous_active = None
+            self.active_action_count = 0
+            self.active_first_turn = True
+
+        current_active = battle.active_pokemon
+        if current_active != self.previous_active:
+            self.previous_active = current_active
+            self.active_action_count = 0
+
+        self.active_first_turn = self.active_action_count == 0
+
+    def create_move_order(self, move, **kwargs):
+        self.active_action_count += 1
+        self.active_first_turn = False
+        return self.create_order(move, **kwargs)
 
     # Evaluate how favorable a Pokemon is against the current opponent.
     def get_matchup_score(self, my_pokemon, opponent_pokemon):
@@ -79,6 +103,7 @@ class SmartBot(Player):
                 battle.opponent_active_pokemon,
                 battle,
                 True,
+                first_turn_override=self.active_first_turn,
             )
         else:
             best_move_value = 0
@@ -125,6 +150,7 @@ class SmartBot(Player):
                 battle.opponent_active_pokemon,
                 battle,
                 True,
+                first_turn_override=self.active_first_turn,
             ),
         )
 
@@ -132,6 +158,7 @@ class SmartBot(Player):
     def choose_move(self, battle):
         # Save the battle reference so helper methods can evaluate the current state without threading battle through every call manually.
         self.current_battle = battle
+        self.update_active_turn_memory(battle)
         self.currentOpponent = battle.opponent_active_pokemon
 
         # Reset our simple opponent-tracking state whenever the rival active Pokemon changes, so later heuristics are based on the current board.
@@ -167,6 +194,7 @@ class SmartBot(Player):
             battle.opponent_active_pokemon,
             battle,
             True,
+            first_turn_override=self.active_first_turn,
         )
         immediate_threat = utilities.is_immediate_switch_threat(
             battle.active_pokemon,
@@ -233,17 +261,17 @@ class SmartBot(Player):
                 )
             if special_mechanic == "terastallize":
                 print(f"Using special mechanic: {special_mechanic}")
-                return self.create_order(best_move, terastallize=True)
+                return self.create_move_order(best_move, terastallize=True)
             if special_mechanic == "dynamax":
                 print(f"Using special mechanic: {special_mechanic}")
-                return self.create_order(best_move, dynamax=True)
+                return self.create_move_order(best_move, dynamax=True)
             if special_mechanic == "mega_evolve":
                 print(f"Using special mechanic: {special_mechanic}")
-                return self.create_order(best_move, mega_evolve=True)
+                return self.create_move_order(best_move, mega_evolve=True)
             if special_mechanic == "z_move":
                 print(f"Using special mechanic: {special_mechanic}")
-                return self.create_order(best_move, z_move=True)
-            return self.create_order(best_move)
+                return self.create_move_order(best_move, z_move=True)
+            return self.create_move_order(best_move)
 
         # Only switch if the best available teammate is clearly better than staying in with the current active Pokemon.
         best_switch = self.choose_best_switch(battle, current_matchup_score)
@@ -282,18 +310,18 @@ class SmartBot(Player):
             )
         if special_mechanic == "terastallize":
             print(f"Using special mechanic: {special_mechanic}")
-            return self.create_order(best_move, terastallize=True)
+            return self.create_move_order(best_move, terastallize=True)
         if special_mechanic == "dynamax":
             print(f"Using special mechanic: {special_mechanic}")
-            return self.create_order(best_move, dynamax=True)
+            return self.create_move_order(best_move, dynamax=True)
         if special_mechanic == "mega_evolve":
             print(f"Using special mechanic: {special_mechanic}")
-            return self.create_order(best_move, mega_evolve=True)
+            return self.create_move_order(best_move, mega_evolve=True)
         if special_mechanic == "z_move":
             print(f"Using special mechanic: {special_mechanic}")
-            return self.create_order(best_move, z_move=True)
+            return self.create_move_order(best_move, z_move=True)
 
-        return self.create_order(best_move)
+        return self.create_move_order(best_move)
 
     battle_format = "gen9randombattle"
     server_configuration = LOCAL_SERVER

@@ -1,13 +1,13 @@
-import battle.buffs as buffs
-import battle.debuffs as debuffs
-import battle.habilities as habilities
+import strategy.data.buffs as buffs
+import strategy.data.debuffs as debuffs
+import strategy.data.abilities as abilities
 
 # Central registry for every strategic ability dictionary we maintain.
 # poke_env tells us which ability a Pokemon has; these dictionaries explain how much that ability should matter to SmartBot's heuristic.
 ABILITY_EFFECT_GROUPS = {
     "boosts_when_hit": (
         buffs.ABILITY_BOOSTS_WHEN_HIT,
-        habilities.ABILITY_BOOSTS_WHEN_HIT,
+        abilities.ABILITY_BOOSTS_WHEN_HIT,
     ),
     "boosts_on_ko": (buffs.ABILITY_BOOSTS_ON_KO,),
     "boosts_on_faint": (buffs.ABILITY_BOOSTS_ON_FAINT,),
@@ -18,45 +18,45 @@ ABILITY_EFFECT_GROUPS = {
     "special_field_buffs": (buffs.ABILITY_SPECIAL_FIELD_BUFFS,),
     "low_hp_buffs": (
         buffs.ABILITY_LOW_HP_BUFFS,
-        habilities.ABILITY_ATTACK_TYPE_MULTIPLIERS,
+        abilities.ABILITY_ATTACK_TYPE_MULTIPLIERS,
     ),
     "status_buffs": (buffs.ABILITY_STATUS_BUFFS,),
     "item_triggered_buffs": (buffs.ABILITY_ITEM_TRIGGERED_BUFFS,),
     "offensive_buffs": (
         buffs.ABILITY_OFFENSIVE_BUFFS,
-        habilities.ABILITY_ATTACK_MOVE_MULTIPLIERS,
+        abilities.ABILITY_ATTACK_MOVE_MULTIPLIERS,
     ),
     "move_type_change_buffs": (
         buffs.ABILITY_MOVE_TYPE_CHANGE_BUFFS,
-        habilities.ABILITY_MOVE_TYPE_CHANGE,
+        abilities.ABILITY_MOVE_TYPE_CHANGE,
     ),
     "crit_buffs": (
         buffs.ABILITY_CRIT_BUFFS,
-        habilities.ABILITY_CRIT_INTERACTIONS,
+        abilities.ABILITY_CRIT_INTERACTIONS,
     ),
     "accuracy_buffs": (buffs.ABILITY_ACCURACY_BUFFS,),
     "stat_change_buffs": (
         buffs.ABILITY_STAT_CHANGE_BUFFS,
-        habilities.ABILITY_STATUS_TEMPO,
+        abilities.ABILITY_STATUS_TEMPO,
     ),
     "speed_tempo_buffs": (buffs.ABILITY_SPEED_TEMPO_BUFFS,),
     "survival_buffs": (buffs.ABILITY_SURVIVAL_BUFFS,),
     "utility_buffs": (buffs.ABILITY_UTILITY_BUFFS,),
-    "type_immunities": (habilities.ABILITY_NEGATES,),
-    "type_healing": (habilities.ABILITY_HEALS_FROM_TYPE,),
-    "redirection": (habilities.ABILITY_REDIRECTS,),
-    "attack_type_multipliers": (habilities.ABILITY_ATTACK_TYPE_MULTIPLIERS,),
-    "attack_move_multipliers": (habilities.ABILITY_ATTACK_MOVE_MULTIPLIERS,),
-    "defense_multipliers": (habilities.ABILITY_DEFENSE_MULTIPLIERS,),
-    "reduce_super_effective": (habilities.ABILITY_REDUCE_SUPER_EFFECTIVE,),
-    "full_hp_reduction": (habilities.ABILITY_FULL_HP_REDUCTION,),
-    "bypass_defensive_abilities": (habilities.ABILITY_BYPASSES_DEFENSIVE_ABILITIES,),
-    "stat_modifiers": (habilities.ABILITY_STAT_MODIFIERS,),
+    "type_immunities": (abilities.ABILITY_NEGATES,),
+    "type_healing": (abilities.ABILITY_HEALS_FROM_TYPE,),
+    "redirection": (abilities.ABILITY_REDIRECTS,),
+    "attack_type_multipliers": (abilities.ABILITY_ATTACK_TYPE_MULTIPLIERS,),
+    "attack_move_multipliers": (abilities.ABILITY_ATTACK_MOVE_MULTIPLIERS,),
+    "defense_multipliers": (abilities.ABILITY_DEFENSE_MULTIPLIERS,),
+    "reduce_super_effective": (abilities.ABILITY_REDUCE_SUPER_EFFECTIVE,),
+    "full_hp_reduction": (abilities.ABILITY_FULL_HP_REDUCTION,),
+    "bypass_defensive_abilities": (abilities.ABILITY_BYPASSES_DEFENSIVE_ABILITIES,),
+    "stat_modifiers": (abilities.ABILITY_STAT_MODIFIERS,),
     "contact_and_indirect": (
-        habilities.ABILITY_CONTACT_AND_INDIRECT,
+        abilities.ABILITY_CONTACT_AND_INDIRECT,
         debuffs.ABILITY_INDIRECT_DAMAGE,
     ),
-    "indirect_rules": (habilities.ABILITY_INDIRECT_RULES,),
+    "indirect_rules": (abilities.ABILITY_INDIRECT_RULES,),
     "debuff_on_switch_in": (debuffs.ABILITY_DEBUFF_ON_SWITCH_IN,),
     "debuff_when_hit": (debuffs.ABILITY_DEBUFF_WHEN_HIT,),
     "contact_debuffs": (debuffs.ABILITY_CONTACT_DEBUFFS,),

@@ -4,6 +4,7 @@ import integrations.poke_env.login_patch
 from poke_env import cross_evaluate
 from tabulate import tabulate
 
+from agents.competitive_agent import create_competitive_bot
 from agents.maxdamage_agent import create_max_damage_bot
 from agents.random_agent import create_random_bot
 from agents.smart_agent import create_smart_bot
@@ -19,6 +20,7 @@ PLAYER_FACTORIES = {
     2: ("RandomBot", create_random_bot),
     3: ("SmartBot", create_smart_bot),
     4: ("SimpleHeuristicsBot", create_simple_heuristics_bot),
+    5: ("CompetitiveBot", create_competitive_bot),
 }
 
 

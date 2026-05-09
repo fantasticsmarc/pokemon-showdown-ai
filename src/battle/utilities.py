@@ -6,10 +6,39 @@ from poke_env.battle.side_condition import SideCondition
 from poke_env.data.gen_data import GenData
 from math import floor
 
-import battle.ability_effects as ability_effects
-import battle.move_effects as move_effects
+from battle.core import (
+    get_current_type_multiplier,
+    get_current_types,
+    get_move_category,
+    get_move_priority,
+    safe_move_attr,
+)
+import strategy.data.ability_effects as ability_effects
+import strategy.data.move_effects as move_effects
 
 TYPE_CHART = GenData.from_gen(9).type_chart
+FIRST_TURN_ONLY_MOVES = {"fakeout", "firstimpression"}
+CHOICE_SPEED_ITEMS = {"choicescarf"}
+CHOICE_PHYSICAL_ITEMS = {"choiceband"}
+CHOICE_SPECIAL_ITEMS = {"choicespecs"}
+GENERAL_DAMAGE_ITEMS = {"lifeorb", "expertbelt"}
+PHYSICAL_DEFENSE_ITEMS = {"eviolite"}
+SPECIAL_DEFENSE_ITEMS = {"eviolite", "assaultvest"}
+ITEM_CONTROL_HIGH_VALUE = {
+    "heavydutyboots",
+    "choicescarf",
+    "choiceband",
+    "choicespecs",
+    "eviolite",
+    "focussash",
+}
+ITEM_CONTROL_MEDIUM_VALUE = {
+    "leftovers",
+    "blacksludge",
+    "lifeorb",
+    "assaultvest",
+    "rockyhelmet",
+}
 
 
 # Safely read a stat from a dict and fall back to a default value when missing.
@@ -161,39 +190,6 @@ def get_defensive_type_multiplier(my_pokemon, opponent_pokemon):
     return max(multiplier1, multiplier2)
 
 
-# Read the Pokemon's current defensive types, including Tera and temporary type changes.
-def get_current_types(pokemon):
-    return (
-        [pokemon.type_1] if pokemon.type_2 is None else [pokemon.type_1, pokemon.type_2]
-    )
-
-
-# Safely compute a move/type multiplier into a Pokemon's current typing.
-def get_current_type_multiplier(target_pokemon, type_or_move):
-    try:
-        return target_pokemon.damage_multiplier(type_or_move)
-    except Exception:
-        return 1.0
-
-
-# Read a move property defensively because forced moves like Recharge may have sparse data.
-def safe_move_attr(move, attr_name, default=None):
-    try:
-        return getattr(move, attr_name)
-    except (KeyError, AttributeError, TypeError):
-        return default
-
-
-# Return the category of a move, defaulting to status for sparse forced actions.
-def get_move_category(move):
-    return safe_move_attr(move, "category", MoveCategory.STATUS)
-
-
-# Return the priority of a move without crashing on sparse forced actions.
-def get_move_priority(move):
-    return safe_move_attr(move, "priority", 0)
-
-
 # Estimate move damage with a simplified damage formula and partial information.
 def calculate_damage(move, attacker, defender, pessimistic, is_bot_turn):
     # Calculate damage of a move using the official Pokemon damage formula and handles estimation for unknown opponent stats.
@@ -251,7 +247,11 @@ def estimate_damage_output(move, attacker, defender, battle, is_bot_turn):
         return 0
 
     # We intentionally use a simplified damage score instead of pretending to know the exact HP damage. The previous "realistic" formula was far too unstable with partial information and produced absurd values.
-    damage_score = safe_move_attr(move, "base_power", 0) * safe_move_attr(move, "accuracy", 1.0) / 2
+    damage_score = (
+        safe_move_attr(move, "base_power", 0)
+        * safe_move_attr(move, "accuracy", 1.0)
+        / 2
+    )
 
     if move_type == attacker.type_1 or move_type == attacker.type_2:
         damage_score *= 1.5
@@ -274,6 +274,8 @@ def estimate_damage_output(move, attacker, defender, battle, is_bot_turn):
         get_stage_multiplier(defense_stage),
         0.5,
     )
+    damage_score *= get_offensive_item_multiplier(attacker, move, defender)
+    damage_score *= get_defensive_item_multiplier(defender, move)
     damage_score *= get_offensive_ability_multiplier(attacker, defender, move, battle)
     damage_score *= get_defensive_ability_multiplier(defender, move)
     damage_score *= safe_move_attr(move, "expected_hits", 1)
@@ -289,6 +291,24 @@ def estimate_damage_percent(move, attacker, defender, battle, is_bot_turn):
 # Return the known ability or, if still hidden, the most likely ability candidate.
 def get_pokemon_ability(pokemon):
     return ability_effects.get_known_ability(pokemon)
+
+
+def normalize_item_id(item):
+    if item is None:
+        return None
+    item_id = getattr(item, "id", item)
+    if item_id is None:
+        return None
+    return str(item_id).lower().replace(" ", "").replace("-", "")
+
+
+def get_known_item_id(pokemon):
+    return normalize_item_id(safe_move_attr(pokemon, "item", None))
+
+
+def has_known_item(pokemon, item_ids):
+    item_id = get_known_item_id(pokemon)
+    return item_id in item_ids if item_id else False
 
 
 # Convert stat stages into their numeric multiplier equivalent.
@@ -440,7 +460,9 @@ def get_target_debuff_value(boosts, attacker, defender, battle, chance=1.0):
         return -18.0 * chance
     if defender_ability == "defiant" and any(stage < 0 for stage in boosts.values()):
         return -28.0 * chance
-    if defender_ability == "competitive" and any(stage < 0 for stage in boosts.values()):
+    if defender_ability == "competitive" and any(
+        stage < 0 for stage in boosts.values()
+    ):
         return -28.0 * chance
 
     value = 0.0
@@ -585,7 +607,9 @@ def get_hazard_setup_value(move, battle):
 
 # Detect if the target is currently behind a protect-like effect this turn.
 def opponent_is_protected(pokemon):
-    return any(effect in move_effects.PROTECT_LIKE_EFFECTS for effect in pokemon.effects)
+    return any(
+        effect in move_effects.PROTECT_LIKE_EFFECTS for effect in pokemon.effects
+    )
 
 
 # Detect if the target is currently behind a substitute.
@@ -610,7 +634,10 @@ def is_protect_like_move(move):
 
 # Detect whether a move is Substitute.
 def is_substitute_move(move):
-    return move.id == "substitute" or safe_move_attr(move, "volatile_status") == Effect.SUBSTITUTE
+    return (
+        move.id == "substitute"
+        or safe_move_attr(move, "volatile_status") == Effect.SUBSTITUTE
+    )
 
 
 # Convert remaining HP into a compact score for the heuristic.
@@ -668,6 +695,12 @@ def get_speed_ability_multiplier(pokemon, battle):
     return 1.0
 
 
+def get_speed_item_multiplier(pokemon):
+    if has_known_item(pokemon, CHOICE_SPEED_ITEMS):
+        return 1.5
+    return 1.0
+
+
 # Estimate the real turn-order speed after boosts and ability effects.
 def get_effective_speed(pokemon, battle):
     base_speed = safe_stat(pokemon.stats, "spe")
@@ -681,7 +714,49 @@ def get_effective_speed(pokemon, battle):
         base_speed
         * get_stage_multiplier(boost_stage)
         * get_speed_ability_multiplier(pokemon, battle)
+        * get_speed_item_multiplier(pokemon)
     )
+
+
+def get_offensive_item_multiplier(attacker, move, defender):
+    move_category = get_move_category(move)
+    item_id = get_known_item_id(attacker)
+    if item_id is None:
+        return 1.0
+
+    multiplier = 1.0
+    if move_category == MoveCategory.PHYSICAL and item_id in CHOICE_PHYSICAL_ITEMS:
+        multiplier *= 1.5
+    if move_category == MoveCategory.SPECIAL and item_id in CHOICE_SPECIAL_ITEMS:
+        multiplier *= 1.5
+    if item_id == "lifeorb":
+        multiplier *= 1.3
+    if item_id == "expertbelt" and get_current_type_multiplier(defender, move) > 1:
+        multiplier *= 1.2
+    return multiplier
+
+
+def get_defensive_item_multiplier(defender, move):
+    move_category = get_move_category(move)
+    item_id = get_known_item_id(defender)
+    if item_id is None:
+        return 1.0
+    if item_id == "eviolite":
+        return 0.67
+    if item_id == "assaultvest" and move_category == MoveCategory.SPECIAL:
+        return 0.67
+    return 1.0
+
+
+def get_item_control_value(target):
+    item_id = get_known_item_id(target)
+    if item_id is None:
+        return 0.0
+    if item_id in ITEM_CONTROL_HIGH_VALUE:
+        return 28.0
+    if item_id in ITEM_CONTROL_MEDIUM_VALUE:
+        return 18.0
+    return 8.0
 
 
 # Apply offensive ability modifiers that can increase the value of an attacking move.
@@ -824,11 +899,24 @@ def daniela(
     battle,
     is_bot_turn,
     include_setup_safety=True,
+    respect_turn_restrictions=True,
+    first_turn_override=None,
 ):
     current_pp = safe_move_attr(move, "current_pp", 1)
     move_category = get_move_category(move)
 
     if current_pp == 0:
+        return float("-inf")
+    is_first_turn = (
+        getattr(attacker, "first_turn", False)
+        if first_turn_override is None
+        else first_turn_override
+    )
+    if (
+        respect_turn_restrictions
+        and move.id in FIRST_TURN_ONLY_MOVES
+        and not is_first_turn
+    ):
         return float("-inf")
 
     if move_category == MoveCategory.STATUS:
@@ -923,7 +1011,9 @@ def daniela(
     value = damage_percent
 
     # If the opponent is currently protected, attacking into it is usually bad unless the chosen move is specifically meant to break that protection.
-    if opponent_is_protected(defender) and not safe_move_attr(move, "breaks_protect", False):
+    if opponent_is_protected(defender) and not safe_move_attr(
+        move, "breaks_protect", False
+    ):
         value *= 0.15
 
     # Give a clear boost to super effective hits and penalize resisted ones so the bot behaves more like "find the strong effective attack" again.
@@ -981,7 +1071,14 @@ def get_known_moves_safely(pokemon):
 
 
 # Get the highest estimated move value a Pokemon can produce against a target.
-def get_best_move_value(attacker, defender, battle, is_bot_turn):
+def get_best_move_value(
+    attacker,
+    defender,
+    battle,
+    is_bot_turn,
+    respect_turn_restrictions=True,
+    first_turn_override=None,
+):
     known_moves = get_known_moves_safely(attacker)
     if not known_moves:
         return 0
@@ -993,6 +1090,8 @@ def get_best_move_value(attacker, defender, battle, is_bot_turn):
             battle,
             is_bot_turn,
             include_setup_safety=False,
+            respect_turn_restrictions=respect_turn_restrictions,
+            first_turn_override=first_turn_override,
         )
         for move in known_moves
     )
@@ -1117,7 +1216,9 @@ def get_known_move_defensive_multiplier(target_type, opponent_pokemon):
 
     # We only care about the scariest known move because switching decisions should be robust against the worst immediate punish we have seen so far.
     return max(
-        safe_move_attr(move, "type").damage_multiplier(target_type, type_chart=TYPE_CHART)
+        safe_move_attr(move, "type").damage_multiplier(
+            target_type, type_chart=TYPE_CHART
+        )
         for move in attacking_moves
     )
 
@@ -1136,9 +1237,15 @@ def is_best_move_likely_to_ko(attacker, defender, move, battle):
         return False
     if effectiveness < 1 and defender.current_hp_fraction > 0.1:
         return False
-    if safe_move_attr(move, "base_power", 0) < 45 and defender.current_hp_fraction > 0.1:
+    if (
+        safe_move_attr(move, "base_power", 0) < 45
+        and defender.current_hp_fraction > 0.1
+    ):
         return False
-    if safe_move_attr(move, "accuracy", 1.0) < 0.9 and defender.current_hp_fraction > 0.12:
+    if (
+        safe_move_attr(move, "accuracy", 1.0) < 0.9
+        and defender.current_hp_fraction > 0.12
+    ):
         return False
     if expected_damage < 18:
         return False
@@ -1222,7 +1329,10 @@ def tera_improves_offense(attacker, move):
         return False
 
     # Tera is especially valuable when it turns a non-STAB move into STAB or when it reinforces a same-type attack on a crucial turn.
-    return move_type_name not in current_types or safe_move_attr(move, "base_power", 0) >= 80
+    return (
+        move_type_name not in current_types
+        or safe_move_attr(move, "base_power", 0) >= 80
+    )
 
 
 # Estimate how much extra offensive value Tera adds to the selected move.
@@ -1613,7 +1723,13 @@ def should_switch_over_best_move(
 # Combine offense, defense, tempo and board state into one matchup score.
 def evaluate_pokemon_matchup(my_pokemon, opponent_pokemon, battle):
     defensive_multiplier = get_defensive_type_multiplier(my_pokemon, opponent_pokemon)
-    my_best_move_value = get_best_move_value(my_pokemon, opponent_pokemon, battle, True)
+    my_best_move_value = get_best_move_value(
+        my_pokemon,
+        opponent_pokemon,
+        battle,
+        True,
+        respect_turn_restrictions=getattr(my_pokemon, "active", False),
+    )
     opponent_best_move_value = get_opponent_threat_value(
         opponent_pokemon,
         my_pokemon,

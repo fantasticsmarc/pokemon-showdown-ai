@@ -25,12 +25,15 @@ GENERAL_DAMAGE_ITEMS = {"lifeorb", "expertbelt"}
 PHYSICAL_DEFENSE_ITEMS = {"eviolite"}
 SPECIAL_DEFENSE_ITEMS = {"eviolite", "assaultvest"}
 ITEM_CONTROL_HIGH_VALUE = {
+    "airballoon",
+    "boosterenergy",
     "heavydutyboots",
     "choicescarf",
     "choiceband",
     "choicespecs",
     "eviolite",
     "focussash",
+    "lightclay",
 }
 ITEM_CONTROL_MEDIUM_VALUE = {
     "leftovers",
@@ -38,6 +41,8 @@ ITEM_CONTROL_MEDIUM_VALUE = {
     "lifeorb",
     "assaultvest",
     "rockyhelmet",
+    "loaded dice",
+    "loadeddice",
 }
 
 
@@ -303,7 +308,10 @@ def normalize_item_id(item):
 
 
 def get_known_item_id(pokemon):
-    return normalize_item_id(safe_move_attr(pokemon, "item", None))
+    item_id = normalize_item_id(safe_move_attr(pokemon, "item", None))
+    if item_id in {None, "", "unknownitem", "unknown_item"}:
+        return None
+    return item_id
 
 
 def has_known_item(pokemon, item_ids):

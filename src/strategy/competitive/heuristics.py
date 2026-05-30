@@ -73,33 +73,6 @@ class CompetitiveAction:
     reason: str = ""
 
 
-EMERGENCY_TACTICAL_KINDS = {
-    "attack",
-    "switch",
-    "heal",
-    "hazard_removal",
-    "disruption",
-    "item_control",
-    "phazing",
-    "anti_setup",
-    "scout",
-}
-
-REPEAT_SENSITIVE_KINDS = {
-    "anti_setup",
-    "cleric",
-    "disruption",
-    "heal",
-    "hazard",
-    "scout",
-    "screen",
-    "setup",
-}
-
-STRATEGIC_OVERRIDE_MARGIN = 18
-ATTACK_CONDITIONAL_MOVES = {"suckerpunch"}
-
-
 def get_move_accuracy(move):
     accuracy = core.safe_move_attr(move, "accuracy", 1.0)
     if accuracy is True or accuracy is None:
@@ -164,6 +137,45 @@ def pokemon_has_type(pokemon, type_name):
     )
 
 
+def is_contextual_setup_move_for_active(move, active):
+    if move.id == "curse":
+        return not pokemon_has_type(active, "ghost")
+    return True
+
+
+def is_pokemon_asleep(pokemon):
+    return pokemon.status is not None and pokemon.status.name.lower() == "slp"
+
+
+def active_has_substitute(pokemon):
+    return utilities.opponent_has_substitute(pokemon)
+
+
+def is_attack_conditional_for_switch_read(move):
+    return (
+        move is not None
+        and move.id
+        in competitive_moves.ATTACK_CONDITIONAL_MOVES
+        | competitive_moves.PRIORITY_TARGET_REQUIRED_ATTACKS
+        | competitive_moves.INTERRUPTIBLE_ATTACK_MOVES
+        | competitive_moves.REACTIVE_DAMAGE_ATTACKS
+        | competitive_moves.USER_HISTORY_REQUIRED_ATTACKS
+        | competitive_moves.TWO_TURN_ATTACKS
+        | competitive_moves.SELF_DESTRUCT_ATTACKS
+    )
+
+
+def get_context_attack_score(battle, move, active_first_turn=None):
+    return utilities.daniela(
+        move,
+        battle.active_pokemon,
+        battle.opponent_active_pokemon,
+        battle,
+        True,
+        first_turn_override=active_first_turn,
+    )
+
+
 def is_status_move_blocked(move, opponent):
     if core.safe_move_attr(move, "status") is None:
         return False
@@ -171,6 +183,9 @@ def is_status_move_blocked(move, opponent):
         return True
 
     move_id = move.id
+    opponent_ability = getattr(opponent, "ability", None)
+    if opponent_ability in {"goodasgold", "magicbounce"}:
+        return True
     if move_id == "thunderwave":
         return pokemon_has_type(opponent, "ground") or pokemon_has_type(opponent, "electric")
     if move_id == "willowisp":
@@ -197,12 +212,64 @@ def get_attack_risk_penalty(move, damage_percent, opponent_hp_percent):
 def is_reliable_finisher(battle, move, context, damage_percent):
     opponent_hp = battle.opponent_active_pokemon.current_hp_fraction * 100
     accuracy = get_move_accuracy(move)
-    if move.id in ATTACK_CONDITIONAL_MOVES and context.expected_opponent_switch:
+    if (
+        move.id in competitive_moves.ATTACK_CONDITIONAL_MOVES
+        and context.expected_opponent_switch
+    ):
+        return False
+    if (
+        move.id in competitive_moves.INTERRUPTIBLE_ATTACK_MOVES
+        and not active_has_substitute(battle.active_pokemon)
+    ):
+        return False
+    if move.id in competitive_moves.REACTIVE_DAMAGE_ATTACKS:
+        return False
+    if move.id in competitive_moves.PRIORITY_TARGET_REQUIRED_ATTACKS:
+        return False
+    if move.id in competitive_moves.USER_HISTORY_REQUIRED_ATTACKS:
+        return False
+    if move.id in competitive_moves.SELF_DESTRUCT_ATTACKS:
+        return False
+    if move.id in competitive_moves.TWO_TURN_ATTACKS and not utilities.skips_charge_turn(
+        move,
+        battle.active_pokemon,
+        battle,
+    ):
         return False
     if accuracy < 0.9 and opponent_hp > 12:
         return False
     margin = 1.08 if opponent_hp <= 35 else 1.15
     return damage_percent >= opponent_hp * margin
+
+
+def has_non_self_destruct_ko(battle, context, ignored_move):
+    active = battle.active_pokemon
+    opponent = battle.opponent_active_pokemon
+    opponent_hp = opponent.current_hp_fraction * 100
+
+    for move in battle.available_moves:
+        if move is ignored_move or not is_attacking_move(move):
+            continue
+        if move.id in competitive_moves.SELF_DESTRUCT_ATTACKS:
+            continue
+        if utilities.is_contextually_unusable_attack(
+            move,
+            active,
+            opponent,
+            battle,
+            first_turn_override=context.active_first_turn,
+        ):
+            continue
+        damage_percent = utilities.estimate_damage_percent(
+            move,
+            active,
+            opponent,
+            battle,
+            True,
+        )
+        if damage_percent >= opponent_hp and get_move_accuracy(move) >= 0.85:
+            return True
+    return False
 
 
 def opponent_has_snowball_route(opponent):
@@ -223,7 +290,7 @@ def finalize_selected_action(actions, selected):
     if selected.value < 0 < best_action.value:
         best_action.reason = f"{best_action.reason}, override_floor"
         return best_action
-    if selected.value + STRATEGIC_OVERRIDE_MARGIN <= best_action.value:
+    if selected.value + competitive_moves.STRATEGIC_OVERRIDE_MARGIN <= best_action.value:
         best_action.reason = f"{best_action.reason}, override_floor"
         return best_action
     return selected
@@ -252,6 +319,10 @@ is_disruption_move = competitive_moves.is_disruption_move
 is_pivot_move = competitive_moves.is_pivot_move
 
 
+def is_sleep_talk_move(move):
+    return move.id in competitive_moves.SLEEP_TALK_MOVES
+
+
 # Estimate broad offensive pressure from the visible moveset.
 def estimate_best_damage_value(pokemon, battle):
     if battle is None or battle.opponent_active_pokemon is None:
@@ -260,12 +331,15 @@ def estimate_best_damage_value(pokemon, battle):
             return 0.0
         return max(core.safe_move_attr(move, "base_power", 0) for move in attacking_moves)
 
-    return utilities.get_best_move_value(
-        pokemon,
-        battle.opponent_active_pokemon,
-        battle,
-        True,
-        respect_turn_restrictions=False,
+    return max(
+        0.0,
+        utilities.get_best_attack_pressure_value(
+            pokemon,
+            battle.opponent_active_pokemon,
+            battle,
+            True,
+            respect_turn_restrictions=False,
+        ),
     )
 
 
@@ -571,17 +645,7 @@ def get_best_available_attack(battle, active_first_turn=None):
     attacks = [move for move in battle.available_moves if is_attacking_move(move)]
     if not attacks:
         return None
-    return max(
-        attacks,
-        key=lambda move: utilities.daniela(
-            move,
-            battle.active_pokemon,
-            battle.opponent_active_pokemon,
-            battle,
-            True,
-            first_turn_override=active_first_turn,
-        ),
-    )
+    return max(attacks, key=lambda move: get_context_attack_score(battle, move, active_first_turn))
 
 
 # Score attacks before TurnContext exists.
@@ -604,11 +668,13 @@ def get_expected_switch_read(battle, best_attack, best_attack_damage):
     active = battle.active_pokemon
     matchup_score = utilities.evaluate_pokemon_matchup(opponent, active, battle)
     attack_accuracy = get_move_accuracy(best_attack) if best_attack is not None else 1.0
+    conditional_attack = is_attack_conditional_for_switch_read(best_attack)
 
     if (
         opponent.current_hp_fraction <= 0.28
         and best_attack_damage >= 35
         and attack_accuracy >= 0.8
+        and not conditional_attack
     ):
         return True, "low_hp_and_attack_pressure"
     if not math.isfinite(matchup_score):
@@ -618,6 +684,7 @@ def get_expected_switch_read(battle, best_attack, best_attack_damage):
     if (
         best_attack_damage >= opponent.current_hp_fraction * 100 * 1.05
         and attack_accuracy >= 0.9
+        and not conditional_attack
     ):
         return True, "near_ko_pressure"
     return False, "none"
@@ -643,11 +710,11 @@ def score_attack_action(battle, move, context):
         value += damage_percent * 0.35
     if context.plan.style == "offense":
         value += damage_percent * 0.18
-    if core.get_current_type_multiplier(opponent, move) > 1:
+    if utilities.get_effective_type_multiplier(opponent, move, active) > 1:
         value += 12
     if context.emergency and damage_percent < 35:
         value -= 10
-    if move.id in ATTACK_CONDITIONAL_MOVES:
+    if move.id in competitive_moves.ATTACK_CONDITIONAL_MOVES:
         if context.expected_opponent_switch:
             value -= 70
             value = min(value, 22 if context.emergency else 18)
@@ -667,6 +734,12 @@ def score_attack_action(battle, move, context):
             value -= 40
             if damage_percent < opponent.current_hp_fraction * 100:
                 value -= 15
+    if move.id in competitive_moves.SELF_DESTRUCT_ATTACKS and has_non_self_destruct_ko(
+        battle,
+        context,
+        move,
+    ):
+        value -= 120
 
     return value
 
@@ -747,6 +820,9 @@ def score_hazard_removal_action(battle, move, context):
 # Score a setup action as a possible win-condition enabler.
 def score_setup_action(battle, move, context):
     active = battle.active_pokemon
+    if not is_contextual_setup_move_for_active(move, active):
+        return float("-inf")
+
     profile = context.plan.profiles.get(active)
     boosts = competitive_moves.get_setup_boosts(move)
     value = utilities.get_setup_stat_value(boosts, active)
@@ -784,8 +860,19 @@ def score_setup_action(battle, move, context):
 def score_disruption_action(battle, move, context):
     active = battle.active_pokemon
     opponent = battle.opponent_active_pokemon
+    if move.id == "curse" and is_contextual_setup_move_for_active(move, active):
+        return float("-inf")
+
     if is_attacking_move(move):
-        if utilities.get_current_type_multiplier(opponent, move) == 0:
+        if utilities.is_contextually_unusable_attack(
+            move,
+            active,
+            opponent,
+            battle,
+            first_turn_override=context.active_first_turn,
+        ):
+            return float("-inf")
+        if utilities.get_effective_type_multiplier(opponent, move, active) == 0:
             return float("-inf")
         damage_percent = utilities.estimate_damage_percent(
             move,
@@ -932,6 +1019,8 @@ def score_cleric_action(battle, move, context):
 def score_scout_action(battle, move, context):
     active = battle.active_pokemon
     value = utilities.daniela(move, active, battle.opponent_active_pokemon, battle, True)
+    if context.expected_opponent_switch and utilities.is_protect_like_move(move):
+        value -= competitive_moves.PROTECT_EXPECTED_SWITCH_PENALTY
     if context.emergency and context.active_importance >= 24:
         value += 14
     if active.current_hp_fraction <= 0.45 and context.opponent_threat > 0:
@@ -940,6 +1029,54 @@ def score_scout_action(battle, move, context):
         value -= 8
     if context.best_attack_damage >= battle.opponent_active_pokemon.current_hp_fraction * 100:
         value -= 34
+    if context.expected_opponent_switch and utilities.is_protect_like_move(move):
+        value = min(value, competitive_moves.PROTECT_EXPECTED_SWITCH_CAP)
+    return value
+
+
+def score_sleep_talk_action(battle, move, context):
+    active = battle.active_pokemon
+    opponent = battle.opponent_active_pokemon
+    if not is_pokemon_asleep(active):
+        return -80.0
+
+    callable_values = []
+    for known_move in get_moves(active):
+        if known_move.id in competitive_moves.SLEEP_TALK_MOVES or known_move.id == "rest":
+            continue
+        if is_attacking_move(known_move):
+            if utilities.get_effective_type_multiplier(opponent, known_move, active) == 0:
+                callable_values.append(-20.0)
+                continue
+            damage_percent = utilities.estimate_damage_percent(
+                known_move,
+                active,
+                opponent,
+                battle,
+                True,
+            )
+            callable_values.append(damage_percent * 0.65 - 8)
+        elif is_setup_move(known_move) and is_contextual_setup_move_for_active(known_move, active):
+            setup_value = utilities.get_setup_stat_value(
+                competitive_moves.get_setup_boosts(known_move),
+                active,
+            )
+            callable_values.append(setup_value * 0.65)
+        elif is_disruption_move(known_move):
+            callable_values.append(
+                min(
+                    28.0,
+                    utilities.daniela(known_move, active, opponent, battle, True) * 0.45,
+                )
+            )
+
+    value = 18.0
+    if callable_values:
+        value += max(callable_values)
+    else:
+        value -= 30
+    if context.opponent_threat >= utilities.estimate_current_hp(active) * 0.7:
+        value -= 8
     return value
 
 
@@ -956,7 +1093,7 @@ def get_action_memory_entry(action):
 
 
 def get_recent_action_penalty(action, recent_actions):
-    if not recent_actions or action.kind not in REPEAT_SENSITIVE_KINDS:
+    if not recent_actions or action.kind not in competitive_moves.REPEAT_SENSITIVE_KINDS:
         return 0.0
 
     move_id = getattr(action.move, "id", None)
@@ -1002,6 +1139,11 @@ def get_recent_action_penalty(action, recent_actions):
             penalty += 18
         if recent_same_move >= 2:
             penalty += 14
+            if (
+                move_id in competitive_moves.HIGH_VALUE_STATUS_MOVES
+                or move_id in competitive_moves.STATUS_PROGRESS_MOVES
+            ):
+                penalty += 18
     elif action.kind == "cleric":
         if same_kind_as_last:
             penalty += 28
@@ -1182,6 +1324,15 @@ def build_move_actions(battle, context):
                     reason="team_protection",
                 )
             )
+        if is_sleep_talk_move(move) and is_pokemon_asleep(battle.active_pokemon):
+            actions.append(
+                CompetitiveAction(
+                    "sleep_talk",
+                    score_sleep_talk_action(battle, move, context),
+                    move=move,
+                    reason="act_while_asleep",
+                )
+            )
         if competitive_moves.is_item_control_move(move):
             item_id = utilities.get_known_item_id(battle.opponent_active_pokemon)
             reason = "permanent_progress"
@@ -1248,28 +1399,188 @@ def build_switch_actions(battle, context, last_switch_from=None):
     ]
 
 
+def score_fallback_move_action(battle, move, context):
+    if is_sleep_talk_move(move):
+        return score_sleep_talk_action(battle, move, context)
+    if competitive_moves.is_cleric_move(move):
+        return score_cleric_action(battle, move, context)
+    if competitive_moves.is_screen_move(move):
+        return score_screen_action(battle, move, context)
+    if competitive_moves.is_item_control_move(move):
+        return score_item_control_action(battle, move, context)
+    if competitive_moves.is_phazing_move(move):
+        return score_phazing_action(battle, move, context)
+    if competitive_moves.is_anti_setup_move(move):
+        return score_anti_setup_action(battle, move, context)
+
+    active = battle.active_pokemon
+    opponent = battle.opponent_active_pokemon
+    if is_attacking_move(move):
+        if utilities.is_contextually_unusable_attack(
+            move,
+            active,
+            opponent,
+            battle,
+            first_turn_override=context.active_first_turn,
+        ):
+            return -120.0
+        damage_percent = utilities.estimate_damage_percent(move, active, opponent, battle, True)
+        value = damage_percent - 35
+        if utilities.get_effective_type_multiplier(opponent, move, active) == 0:
+            value -= 30
+        if core.safe_move_attr(move, "current_pp", 1) == 0:
+            value -= 45
+        if get_move_accuracy(move) < 0.8:
+            value -= 10
+        if context.opponent_hp_percent <= damage_percent:
+            value += 24
+        return max(value, -95.0)
+
+    if is_hazard_move(move):
+        hazard_value = utilities.get_hazard_setup_value(move, battle)
+        if not math.isfinite(hazard_value):
+            return -120.0
+        return hazard_value - 40
+
+    value = -45.0
+    if utilities.is_protect_like_move(move):
+        value -= 18 if context.expected_opponent_switch else 0
+    if is_healing_move(move) and active.current_hp_fraction <= 0.45:
+        value += 12
+    if is_setup_move(move) and context.safe_turn:
+        value += 8
+    return value
+
+
+def get_fallback_action_kind(move):
+    if is_sleep_talk_move(move):
+        return "sleep_talk"
+    if competitive_moves.is_cleric_move(move):
+        return "cleric"
+    if competitive_moves.is_screen_move(move):
+        return "screen"
+    if competitive_moves.is_item_control_move(move):
+        return "item_control"
+    if competitive_moves.is_phazing_move(move):
+        return "phazing"
+    if competitive_moves.is_anti_setup_move(move):
+        return "anti_setup"
+    if is_attacking_move(move):
+        return "attack"
+    if is_hazard_move(move):
+        return "hazard"
+    if is_healing_move(move):
+        return "heal"
+    if utilities.is_protect_like_move(move):
+        return "scout"
+    if is_setup_move(move):
+        return "setup"
+    if is_disruption_move(move):
+        return "disruption"
+    return "utility"
+
+
+def build_fallback_move_actions(battle, context, recent_actions=None):
+    actions = [
+        CompetitiveAction(
+            get_fallback_action_kind(move),
+            score_fallback_move_action(battle, move, context),
+            move=move,
+            reason="fallback_legal_move",
+        )
+        for move in battle.available_moves
+    ]
+    return apply_recent_action_penalties(actions, recent_actions)
+
+
 # Build all legal actions in one place so decision making and debug rankings use
 # exactly the same scores.
 def build_competitive_actions(battle, context, last_switch_from=None, recent_actions=None):
     actions = build_move_actions(battle, context)
     actions.extend(build_switch_actions(battle, context, last_switch_from))
-    return apply_recent_action_penalties(actions, recent_actions)
+    actions = apply_recent_action_penalties(actions, recent_actions)
+    actions = [action for action in actions if math.isfinite(action.value)]
+    if not actions and battle.available_moves:
+        return build_fallback_move_actions(battle, context, recent_actions)
+    if actions and battle.available_moves and max(action.value for action in actions) < -60:
+        actions.extend(build_fallback_move_actions(battle, context, recent_actions))
+    if context.expected_opponent_switch:
+        progress_actions = [
+            action
+            for action in actions
+            if not (
+                action.kind == "scout"
+                and action.move is not None
+                and utilities.is_protect_like_move(action.move)
+            )
+        ]
+        if progress_actions:
+            return progress_actions
+    return actions
 
 
 # Return the strongest action per kind, useful both for logic and readable debug.
 def get_best_actions_by_kind(actions):
     best_by_kind = {}
     for action in actions:
+        if action is None or not math.isfinite(action.value):
+            continue
         if action.kind not in best_by_kind or action.value > best_by_kind[action.kind].value:
             best_by_kind[action.kind] = action
     return best_by_kind
 
 
 def get_best_action(actions):
-    candidates = [action for action in actions if action is not None]
+    candidates = [
+        action
+        for action in actions
+        if action is not None and math.isfinite(action.value)
+    ]
     if not candidates:
         return None
     return max(candidates, key=lambda action: action.value)
+
+
+def get_reliable_low_hp_finisher(battle, actions, best_attack, context):
+    if best_attack is None or best_attack.move is None:
+        return None
+
+    opponent_hp = context.opponent_hp_percent
+    if opponent_hp > 15 or get_move_accuracy(best_attack.move) >= 0.85:
+        return None
+
+    active = battle.active_pokemon
+    opponent = battle.opponent_active_pokemon
+    reliable_finishers = []
+    for action in actions:
+        if action.kind != "attack" or action.move is None:
+            continue
+        if is_attack_conditional_for_switch_read(action.move):
+            continue
+        if get_move_accuracy(action.move) < 0.9:
+            continue
+        damage_percent = utilities.estimate_damage_percent(
+            action.move,
+            active,
+            opponent,
+            battle,
+            True,
+        )
+        if damage_percent >= opponent_hp:
+            reliable_finishers.append(action)
+
+    if not reliable_finishers:
+        return None
+
+    reliable = max(reliable_finishers, key=lambda action: action.value)
+    if reliable.value >= best_attack.value - 55:
+        reliable.reason = (
+            f"reliable_low_hp_ko damage="
+            f"{utilities.estimate_damage_percent(reliable.move, active, opponent, battle, True):.1f} "
+            f"hp={opponent_hp:.1f}"
+        )
+        return reliable
+    return None
 
 
 # Format the top candidate actions so bad choices can be diagnosed from logs.
@@ -1329,11 +1640,19 @@ def choose_competitive_action(battle, context, last_switch_from=None, recent_act
     # Tactical guardrail: if we have a strong immediate attack, do not let a
     # long-term plan steal the turn unless it is clearly better.
     if best_attack and context.best_attack_damage >= battle.opponent_active_pokemon.current_hp_fraction * 100:
-        best_attack.reason = (
-            f"secure_ko damage={context.best_attack_damage:.1f} "
-            f"hp={context.opponent_hp_percent:.1f}"
+        reliable_low_hp_finisher = get_reliable_low_hp_finisher(
+            battle,
+            actions,
+            best_attack,
+            context,
         )
+        if reliable_low_hp_finisher is not None:
+            return finalize_selected_action(actions, reliable_low_hp_finisher)
         if is_reliable_finisher(battle, best_attack.move, context, context.best_attack_damage):
+            best_attack.reason = (
+                f"secure_ko damage={context.best_attack_damage:.1f} "
+                f"hp={context.opponent_hp_percent:.1f}"
+            )
             return finalize_selected_action(actions, best_attack)
 
     # Emergency turns should either switch, revenge kill, or accept a sacrifice
@@ -1341,7 +1660,11 @@ def choose_competitive_action(battle, context, last_switch_from=None, recent_act
     if context.emergency:
         best_attack_or_switch = get_best_action([best_attack, best_switch])
         best_tactical = get_best_action(
-            [action for action in actions if action.kind in EMERGENCY_TACTICAL_KINDS]
+            [
+                action
+                for action in actions
+                if action.kind in competitive_moves.EMERGENCY_TACTICAL_KINDS
+            ]
         )
 
         opponent_boosts = utilities.get_boost_score(battle.opponent_active_pokemon)
@@ -1375,6 +1698,15 @@ def choose_competitive_action(battle, context, last_switch_from=None, recent_act
         if best_switch and best_switch.value >= (best_attack.value if best_attack else 0) + 10:
             best_switch.reason = "emergency_preserve_or_revenge"
             return finalize_selected_action(actions, best_switch)
+        best_action = max(actions, key=lambda action: action.value)
+        if (
+            best_attack
+            and best_attack.value < 0
+            and best_action.kind != "attack"
+            and best_action.value >= best_attack.value + 8
+        ):
+            best_action.reason = f"emergency_least_bad_{best_action.kind}"
+            return finalize_selected_action(actions, best_action)
         if best_attack and active_can_be_sacrificed(battle, context):
             best_attack.reason = "sacrifice_for_chip"
             return finalize_selected_action(actions, best_attack)
@@ -1413,6 +1745,11 @@ def choose_competitive_action(battle, context, last_switch_from=None, recent_act
             ]
             if action is not None
         ]
+        if not endgame_candidates:
+            best_legal_action = get_best_action(actions)
+            if best_legal_action is None:
+                return None
+            return finalize_selected_action(actions, best_legal_action)
         return finalize_selected_action(
             actions,
             max(endgame_candidates, key=lambda action: action.value),

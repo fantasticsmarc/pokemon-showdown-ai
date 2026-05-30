@@ -65,9 +65,88 @@ HEALING_MOVE_FALLBACKS = {
     "synthesis": 0.5,
     "wish": 0.5,
     "rest": 1.0,
+    "painsplit": 0.35,
+    "strengthsap": 0.5,
 }
 
 
 # Moves with delayed or risky recovery should be valued lower than immediate healing.
 DELAYED_HEALING_MOVES = {"wish"}
 SELF_SLEEP_HEALING_MOVES = {"rest"}
+
+
+# Attacks whose success depends on a specific turn context rather than only on
+# accuracy, typing and damage.
+ATTACK_CONDITIONAL_MOVES = {"suckerpunch", "thunderclap"}
+PRIORITY_TARGET_REQUIRED_ATTACKS = {"upperhand"}
+INTERRUPTIBLE_ATTACK_MOVES = {"focuspunch"}
+REACTIVE_DAMAGE_ATTACKS = {
+    "bide",
+    "comeuppance",
+    "counter",
+    "metalburst",
+    "mirrorcoat",
+    "shelltrap",
+}
+
+
+# Attacks that fail unless the target/user/field has a required state.
+TARGET_STATUS_REQUIRED_ATTACKS = {
+    "dreameater": {"slp"},
+}
+USER_STATUS_REQUIRED_ATTACKS = {
+    "snore": {"slp"},
+}
+FIELD_REQUIRED_ATTACKS = {
+    "steelroller": {"electricterrain", "grassyterrain", "mistyterrain", "psychicterrain"},
+}
+TARGET_ITEM_REQUIRED_ATTACKS = {"poltergeist"}
+USER_ITEM_REQUIRED_ATTACKS = {"fling", "naturalgift"}
+USER_HISTORY_REQUIRED_ATTACKS = {"belch", "lastresort"}
+
+
+# Two-turn attacks are not unusable, but should not be treated as immediate
+# damage unless weather or an item removes the charge turn.
+TWO_TURN_ATTACKS = {
+    "bounce",
+    "dig",
+    "dive",
+    "electroshot",
+    "fly",
+    "freezeshock",
+    "iceburn",
+    "meteorbeam",
+    "phantomforce",
+    "razorwind",
+    "shadowforce",
+    "skullbash",
+    "skyattack",
+    "skydrop",
+    "solarbeam",
+    "solarblade",
+}
+SUN_SKIP_CHARGE_ATTACKS = {"solarbeam", "solarblade"}
+RAIN_SKIP_CHARGE_ATTACKS = {"electroshot"}
+
+
+# Attacks that consume the user or a large chunk of its HP need a different
+# risk model from ordinary recoil.
+SELF_DESTRUCT_ATTACKS = {"explosion", "finalgambit", "mistyexplosion", "selfdestruct"}
+HIGH_SELF_DAMAGE_ATTACKS = {"chloroblast", "mindblown", "steelbeam"}
+
+
+# Moves exposed with basePower 0 whose damage is determined dynamically.
+SPEED_RATIO_ATTACKS = {"electroball", "gyroball"}
+LOW_HP_POWER_ATTACKS = {"flail", "reversal"}
+TARGET_HP_POWER_ATTACKS = {"crushgrip", "hardpress", "wringout"}
+BOOST_POWER_ATTACKS = {"powertrip", "storedpower"}
+HALF_CURRENT_HP_ATTACKS = {
+    "guardianofalola",
+    "naturesmadness",
+    "ruination",
+    "superfang",
+}
+USER_HP_DAMAGE_ATTACKS = {"finalgambit"}
+HP_EQUALIZER_ATTACKS = {"endeavor"}
+RANDOM_POWER_ATTACKS = {"magnitude", "present"}
+OHKO_ATTACKS = {"fissure", "guillotine", "horndrill", "sheercold"}

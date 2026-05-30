@@ -3,20 +3,35 @@ import asyncio
 import contextlib
 from pathlib import Path
 import sys
-
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from agents.competitive_agent import create_competitive_bot
-from agents.smart_agent import create_smart_bot
+from poke_env import AccountConfiguration
+
+from agents.competitive_agent import CompetitiveBot, LOCAL_SERVER
+from agents.smart_agent import SmartBot
 
 
 async def run_battles(battles: int, smart_debug: bool) -> None:
-    competitive = create_competitive_bot(1)
-    smart = create_smart_bot(1)
+    suffix = uuid.uuid4().hex[:8]
+    competitive = CompetitiveBot(
+        account_configuration=AccountConfiguration(
+            username=f"CB{suffix}",
+            password=None,
+        ),
+        server_configuration=LOCAL_SERVER,
+    )
+    smart = SmartBot(
+        account_configuration=AccountConfiguration(
+            username=f"SB{suffix}",
+            password=None,
+        ),
+        server_configuration=LOCAL_SERVER,
+    )
     competitive.debug_enabled = True
     smart.debug_enabled = smart_debug
 

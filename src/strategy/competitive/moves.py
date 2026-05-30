@@ -108,6 +108,70 @@ HIGH_VALUE_STATUS_MOVES = {
     "willowisp",
 }
 
+STATUS_PROGRESS_MOVES = {
+    "confuseray",
+    "curse",
+    "disable",
+    "leechseed",
+    "perishsong",
+    "strengthsap",
+    "torment",
+    "yawn",
+}
+
+CONTEXTUAL_SETUP_BOOSTS = {
+    "curse": {"atk": 1, "def": 1},
+}
+
+SLEEP_TALK_MOVES = {"sleeptalk"}
+
+# Tactical action groups used by the competitive decision layer.
+EMERGENCY_TACTICAL_KINDS = {
+    "attack",
+    "switch",
+    "heal",
+    "hazard_removal",
+    "disruption",
+    "item_control",
+    "phazing",
+    "anti_setup",
+    "scout",
+    "sleep_talk",
+}
+
+REPEAT_SENSITIVE_KINDS = {
+    "anti_setup",
+    "cleric",
+    "disruption",
+    "heal",
+    "hazard",
+    "scout",
+    "screen",
+    "setup",
+}
+
+STRATEGIC_OVERRIDE_MARGIN = 12
+
+# Protect-like moves lose most of their value when we expect the opponent to
+# switch, because they spend our free turn without creating board progress.
+PROTECT_EXPECTED_SWITCH_PENALTY = 64
+PROTECT_EXPECTED_SWITCH_CAP = -8
+
+# Conditional or context-sensitive attacks can fail based on the turn state.
+ATTACK_CONDITIONAL_MOVES = move_effects.ATTACK_CONDITIONAL_MOVES
+PRIORITY_TARGET_REQUIRED_ATTACKS = move_effects.PRIORITY_TARGET_REQUIRED_ATTACKS
+INTERRUPTIBLE_ATTACK_MOVES = move_effects.INTERRUPTIBLE_ATTACK_MOVES
+REACTIVE_DAMAGE_ATTACKS = move_effects.REACTIVE_DAMAGE_ATTACKS
+TARGET_STATUS_REQUIRED_ATTACKS = move_effects.TARGET_STATUS_REQUIRED_ATTACKS
+USER_STATUS_REQUIRED_ATTACKS = move_effects.USER_STATUS_REQUIRED_ATTACKS
+FIELD_REQUIRED_ATTACKS = move_effects.FIELD_REQUIRED_ATTACKS
+TARGET_ITEM_REQUIRED_ATTACKS = move_effects.TARGET_ITEM_REQUIRED_ATTACKS
+USER_ITEM_REQUIRED_ATTACKS = move_effects.USER_ITEM_REQUIRED_ATTACKS
+USER_HISTORY_REQUIRED_ATTACKS = move_effects.USER_HISTORY_REQUIRED_ATTACKS
+TWO_TURN_ATTACKS = move_effects.TWO_TURN_ATTACKS
+SELF_DESTRUCT_ATTACKS = move_effects.SELF_DESTRUCT_ATTACKS
+HIGH_SELF_DAMAGE_ATTACKS = move_effects.HIGH_SELF_DAMAGE_ATTACKS
+
 
 @dataclass
 class MoveProfile:
@@ -160,6 +224,9 @@ def is_setup_move(move):
 # Return only positive self-boosts. This avoids treating Close Combat as setup
 # while still valuing Dragon Dance, Calm Mind, Victory Dance, etc.
 def get_setup_boosts(move):
+    if move.id in CONTEXTUAL_SETUP_BOOSTS:
+        return CONTEXTUAL_SETUP_BOOSTS[move.id]
+
     self_boost = core.safe_move_attr(move, "self_boost")
     if self_boost:
         return {
@@ -189,6 +256,8 @@ def is_phazing_move(move):
 
 # Disruption includes status, debuffs, phazing, anti-setup and secondary effects.
 def is_disruption_move(move):
+    if move.id in STATUS_PROGRESS_MOVES:
+        return True
     if core.safe_move_attr(move, "status") is not None:
         return True
 
@@ -200,7 +269,11 @@ def is_disruption_move(move):
         return True
 
     for secondary in core.safe_move_attr(move, "secondary", []):
-        if secondary.get("status") is not None or secondary.get("boosts"):
+        if (
+            secondary.get("status") is not None
+            or secondary.get("boosts")
+            or secondary.get("volatileStatus") is not None
+        ):
             return True
     return False
 
